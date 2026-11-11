@@ -3,8 +3,8 @@
 """Anchor Memory MCP Server.
 
 A local-first long-term memory system for AI companions.
-Provides 11 focused tools covering working memory, episodic/semantic
-long-term memory, and situation-aware procedural guides.
+Provides 12 focused tools covering working memory, episodic/semantic
+long-term memory, situation-aware procedural guides, and conversation history search.
 
 Usage:
     python server.py
@@ -15,6 +15,7 @@ Configuration (via environment variables):
     ANCHOR_COMPANION_NAME   Name of the AI companion (default: companion)
     ANCHOR_USER_NAME        Name of the human user (default: user)
     ANCHOR_SEARCH_TOOL_MODE Search mode: always | never | on_demand (default: on_demand)
+    ANCHOR_CHAT_DB_PATH     Path to chat SQLite database for conversation search
 """
 import sys
 import logging
@@ -26,12 +27,14 @@ try:
     from anchor.working_memory.service import WorkingMemoryService
     from anchor.long_term.service import LongTermMemoryService
     from anchor.recall.search_tool import AnchorSearchTool
+    from anchor.recall.chat_history import ConversationSearchTool
     from anchor.procedural.guide_service import ProceduralGuideService
     from anchor.config import ANCHOR_DB_PATH, COMPANION_NAME, USER_NAME
 except ImportError:
     from working_memory.service import WorkingMemoryService
     from long_term.service import LongTermMemoryService
     from recall.search_tool import AnchorSearchTool
+    from recall.chat_history import ConversationSearchTool
     from procedural.guide_service import ProceduralGuideService
     from config import ANCHOR_DB_PATH, COMPANION_NAME, USER_NAME
 
@@ -43,13 +46,14 @@ mcp = MCPServer("anchor_memory")
 wm_service = WorkingMemoryService()
 lt_service = LongTermMemoryService()
 search_tool = AnchorSearchTool()
+conv_search_tool = ConversationSearchTool()
 guide_service = ProceduralGuideService()
 
 # ----------------- 1. Working Memory Tools -----------------
 
 @mcp.tool()
 async def working_memory_add(content: str, category: str = "general") -> str:
-    """Add a short-term ongoing item to working memory (the prefrontal cortex buffer).
+    """Add a short-term ongoing item to working memory (prefrontal buffer).
 
     Use this for tasks, commitments, or situations that need active attention
     over the next few days. Items expire automatically after the buffer period.
@@ -222,7 +226,51 @@ async def anchor_memory_search(query: str, limit: int = 4) -> str:
     return "\n".join(lines)
 
 
-# ----------------- 3. Procedural Memory Tools -----------------
+# ----------------- 3. Conversation Search Tool -----------------
+
+@mcp.tool()
+async def search_conversation(
+    query: str,
+    scope: str = "recent",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 6
+) -> str:
+    """Search past conversation messages by keywords/semantics and date range.
+
+    Use this when you need to recall specific things said in earlier conversations,
+    past discussions, or check chat history within a certain time window.
+
+    Parameters:
+    - query: Search keywords or sentence
+    - scope: Time range: 'recent' (3 days) | '7d' (7 days) | '30d' (30 days) | '90d' (90 days) | 'all' (all history)
+    - start_date: Optional start date filter in YYYY-MM-DD format
+    - end_date: Optional end date filter in YYYY-MM-DD format
+    - limit: Maximum number of messages to return (default: 6, max: 20)
+    """
+    res = conv_search_tool.search_conversation(
+        query=query,
+        limit=limit,
+        scope=scope,
+        start_date=start_date,
+        end_date=end_date
+    )
+    if "error" in res and res["error"]:
+        return f"Search conversation error: {res['error']}"
+
+    results = res.get("results", [])
+    if not results:
+        return f"No conversation records found matching '{query}' in scope '{res.get('scope')}'."
+
+    lines = [f"[Conversation Search Results · {len(results)} found (scope: {res.get('scope')})]"]
+    for r in results:
+        role = r.get("role", "unknown")
+        dt = r.get("created_at", "")[:19]
+        lines.append(f"- [{dt}] {role}: {r.get('content')}")
+    return "\n".join(lines)
+
+
+# ----------------- 4. Procedural Memory Tools -----------------
 
 @mcp.tool()
 async def procedural_guide_create(situation: str, playbook: str, taboos: str) -> str:

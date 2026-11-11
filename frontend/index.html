@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Anchor Memory - 记忆设置</title>
+
+<!-- Fonts: Newsreader (Serif) & Noto Serif SC -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Noto+Serif+SC:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+:root {
+  --font-serif: 'Newsreader', 'Noto Serif SC', Georgia, serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  --bg-page: #fbf9f9;
+  --bg-card: rgba(255, 255, 255, 0.95);
+  --bg-input: #f6f2f4;
+  --bg-input-focus: #ffffff;
+
+  --accent: #b87d8e;
+  --accent-hover: #a76b7c;
+  --accent-subtle: #f8f1f3;
+  --accent-border: #e6cfd6;
+
+  --text-main: #2a2527;
+  --text-sub: #63585c;
+  --text-muted: #9c8e93;
+
+  --border: rgba(0, 0, 0, 0.08);
+  --border-card: rgba(184, 125, 142, 0.2);
+
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-card: 18px;
+
+  --shadow-card: 0 4px 18px -2px rgba(184, 125, 142, 0.06), 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-page: #171518;
+    --bg-card: rgba(30, 27, 33, 0.92);
+    --bg-input: #28242b;
+    --bg-input-focus: #302b34;
+
+    --accent: #cf96a6;
+    --accent-hover: #bf8596;
+    --accent-subtle: rgba(207, 150, 166, 0.12);
+    --accent-border: rgba(207, 150, 166, 0.3);
+
+    --text-main: #f5eff1;
+    --text-sub: #c9bec2;
+    --text-muted: #8c7f84;
+
+    --border: rgba(255, 255, 255, 0.08);
+    --border-card: rgba(207, 150, 166, 0.2);
+
+    --shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-page);
+  color: var(--text-main);
+  min-height: 100vh;
+  padding: 24px 16px 80px;
+  display: flex;
+  justify-content: center;
+}
+
+.container {
+  width: 100%;
+  max-width: 680px;
+}
+
+header {
+  margin-bottom: 24px;
+}
+
+h1 {
+  font-family: var(--font-serif);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+}
+
+p.subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.card-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-card);
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: var(--shadow-card);
+}
+
+.card-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-serif);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.card-desc {
+  font-size: 13px;
+  color: var(--text-sub);
+  line-height: 1.6;
+  margin-top: 4px;
+}
+
+/* Switch toggle */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: var(--border);
+  transition: .3s;
+  border-radius: 26px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: var(--accent);
+}
+
+input:checked + .slider:before {
+  transform: translateX(18px);
+}
+
+/* Form inputs */
+.options-group {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+label.form-label {
+  font-size: 13px;
+  color: var(--text-sub);
+}
+
+select, input[type="number"], input[type="text"] {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--text-main);
+  outline: none;
+  font-family: inherit;
+}
+
+select:focus, input:focus {
+  border-color: var(--accent);
+  background: var(--bg-input-focus);
+}
+
+/* Radio buttons group */
+.radio-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.radio-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-sub);
+}
+
+.radio-btn input {
+  display: none;
+}
+
+.radio-btn.active {
+  background: var(--accent-subtle);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.save-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+  padding: 12px 24px;
+  display: flex;
+  justify-content: flex-end;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.05);
+}
+</style>
+</head>
+
+<body>
+<div class="container">
+  <header>
+    <h1>Anchor Memory Settings</h1>
+    <p class="subtitle">记忆系统运行参数与上下文注入配置（所有配置持久化保存在本地 SQLite 的 anchor_settings 表中）</p>
+  </header>
+
+  <!-- 1. 睡前对话尾巴衔接 -->
+  <div class="card-section">
+    <div class="card-header-row">
+      <div>
+        <div class="card-title">睡前对话余温衔接 (Bedtime Tail Bridge)</div>
+        <p class="card-desc">每天打烊复盘后，第二天唤醒时默认带有一段昨日摘要。开启此项后，系统会在昨日摘要下方，额外附带上昨晚临睡前的最后几条真实对话，保留交谈语境与情绪余温，使第二天的开场衔接更自然。</p>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="bedtime_tail_enabled" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="options-group" id="bedtime_tail_options">
+      <div class="form-row">
+        <label class="form-label">截取模式</label>
+        <div class="radio-group" id="tail_mode_group">
+          <label class="radio-btn active"><input type="radio" name="tail_mode" value="rounds" checked>按轮次截取</label>
+          <label class="radio-btn"><input type="radio" name="tail_mode" value="tokens">按 Token 预算截取</label>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label" id="tail_value_label">保留最后轮数</label>
+        <input type="number" id="bedtime_tail_value" value="4" min="1" max="20" style="width: 90px;">
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. 对话压缩与单日窗口清理 -->
+  <div class="card-section">
+    <div class="card-header-row">
+      <div>
+        <div class="card-title">单日滚动对话压缩 (Daily Rolling Summary)</div>
+        <p class="card-desc">当某一天交谈轮次特别多、单日累积消息过长时，会大量占用模型窗口并增加消耗。开启此功能后，可以随时手动或由打烊流程触发压缩：系统从最早的未压缩原始消息提取摘要，与此前的滚动摘要合并，安全释放原始消息占用的上下文。</p>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="rolling_summary_enabled" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- 3. 老记忆情绪增量补齐 -->
+  <div class="card-section">
+    <div class="card-header-row">
+      <div>
+        <div class="card-title">老记忆情绪增量补齐 (Backfill)</div>
+        <p class="card-desc">针对记忆库中从外部系统导入、或尚未标记情绪属性的历史记忆。开启后，系统在打烊批处理时，自动分析老记忆并补齐情绪愉悦度、激烈度和分类标签。若关闭，老记忆不会被修改，系统统一按 0.5 中立权重安全参与运算。</p>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="backfill_enabled" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="options-group" id="backfill_options">
+      <div class="form-row">
+        <label class="form-label">每日批处理最大条数</label>
+        <input type="number" id="backfill_batch_size" value="10" min="1" max="100" style="width: 90px;">
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. 记忆主动搜索工具权限 -->
+  <div class="card-section">
+    <div class="card-header-row">
+      <div>
+        <div class="card-title">记忆主动搜索工具模式 (Search Tool Mode)</div>
+        <p class="card-desc">系统每轮对话都会根据语义向量、实体标签、情绪共振和时效衰减四个维度，在后台自动计算并向模型注入相关的长期记忆（此基础召回每轮自动自带）。此设置控制：<strong>当模型在交谈中觉得当前上下文信息不够用时，是否允许模型主动调用搜索工具去记忆库里二次搜索</strong>。</p>
+      </div>
+    </div>
+
+    <div class="options-group">
+      <div class="form-row">
+        <label class="form-label">工具暴露策略</label>
+        <select id="search_mode" style="width: 240px;">
+          <option value="on_demand" selected>按需由模型自主决定 (默认推荐)</option>
+          <option value="always">始终强制在每轮提示词中暴露</option>
+          <option value="never">完全禁用搜索工具 (仅依赖前置注入)</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. 低权重沉底记忆归档清理 -->
+  <div class="card-section">
+    <div class="card-header-row">
+      <div>
+        <div class="card-title">低权重沉底记忆管理 (Decay Archive)</div>
+        <p class="card-desc">记忆库中的条目会随时间自然衰减权重（重要度 $\ge 0.8$ 的核心记忆享有永久保护不会衰减）。长时间未被提及且重要度较低的记忆会沉到库底。你可以定期查看这些低权重记忆，并将其归档至 Obsidian 保管库 (Vault)，既能精简日常记忆库，又保证数据永远不会丢失。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="save-bar">
+  <button class="btn-primary" id="save_btn">保存设置</button>
+</div>
+
+<script>
+// 本前端页面是独立的设置面板示例。
+// 如果你接入了自己的后端 API，可以修改以下 fetch 地址指向你的设置路由。
+const API_BASE = '/api/anchor/settings';
+
+async function loadSettings() {
+  try {
+    const res = await fetch(API_BASE);
+    if (!res.ok) return;
+    const data = await res.json();
+    
+    if (data.bedtime_tail_enabled !== undefined) {
+      document.getElementById('bedtime_tail_enabled').checked = Boolean(data.bedtime_tail_enabled);
+    }
+    if (data.bedtime_tail_value) {
+      document.getElementById('bedtime_tail_value').value = data.bedtime_tail_value;
+    }
+    if (data.search_mode) {
+      document.getElementById('search_mode').value = data.search_mode;
+    }
+    if (data.backfill_enabled !== undefined) {
+      document.getElementById('backfill_enabled').checked = Boolean(data.backfill_enabled);
+    }
+    if (data.backfill_batch_size) {
+      document.getElementById('backfill_batch_size').value = data.backfill_batch_size;
+    }
+  } catch (e) {
+    console.log('Using default local settings (no backend server responding)');
+  }
+}
+
+document.getElementById('save_btn').addEventListener('click', async () => {
+  const payload = {
+    bedtime_tail_enabled: document.getElementById('bedtime_tail_enabled').checked,
+    bedtime_tail_value: parseInt(document.getElementById('bedtime_tail_value').value, 10),
+    search_mode: document.getElementById('search_mode').value,
+    backfill_enabled: document.getElementById('backfill_enabled').checked,
+    backfill_batch_size: parseInt(document.getElementById('backfill_batch_size').value, 10),
+  };
+
+  try {
+    const res = await fetch(API_BASE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) {
+      alert('设置已成功保存！');
+    } else {
+      alert('保存失败，请检查后端服务。');
+    }
+  } catch (e) {
+    alert('本地演示模式：设置数据已生成（未连接到实时后端）。');
+  }
+});
+
+// Radio buttons interaction
+document.querySelectorAll('.radio-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    btn.parentElement.querySelectorAll('.radio-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+});
+
+loadSettings();
+</script>
+</body>
+</html>
