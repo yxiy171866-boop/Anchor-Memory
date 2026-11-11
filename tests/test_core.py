@@ -204,6 +204,23 @@ class TestAnchorMemory(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(len(svc.get_all_guides()), 0)
 
+    def test_working_memory_buffer_context_injection_and_countdown(self):
+        from anchor.working_memory.service import WorkingMemoryService
+        wm = WorkingMemoryService(db_path=self.db_path)
+        item1 = wm.add_item("Active task: prepare presentation", category="todo")
+        item2 = wm.add_item("Completed task: fix bug in auth", category="task")
+        
+        # Expire item2 into buffer
+        wm.expire_item(item2.id, reason="fixed in commit 123")
+        
+        context_text = wm.format_for_context()
+        self.assertIn("Active Items (In Progress)", context_text)
+        self.assertIn(item1.id, context_text)
+        self.assertIn("Expired Buffer", context_text)
+        self.assertIn(item2.id, context_text)
+        self.assertIn("until archive", context_text)
+        self.assertIn("fixed in commit 123", context_text)
+
 
 if __name__ == "__main__":
     unittest.main()

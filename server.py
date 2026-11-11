@@ -52,18 +52,24 @@ guide_service = ProceduralGuideService()
 # ----------------- 1. Working Memory Tools -----------------
 
 @mcp.tool()
-async def working_memory_list() -> str:
-    """List all currently active items in working memory (prefrontal buffer).
+async def working_memory_list(status: str = "active") -> str:
+    """List items in working memory by status.
 
-    Returns item IDs, categories, and descriptions so the model can inspect ongoing states.
+    Note: Ongoing active items and 2-day expired buffer items are already automatically
+    pre-injected into prompt context on every turn. Use this tool primarily to review
+    specific items or archived history.
+
+    Parameters:
+    - status: Filter status, one of 'active' (default), 'expired' (in buffer), or 'archived'
     """
-    items = wm_service.get_active_items()
+    items = wm_service.get_items(status=status)
     if not items:
-        return "Working memory is currently empty (no active items)."
+        return f"Working memory has no [{status}] items."
 
-    lines = [f"[Active Working Memory · {len(items)} items]"]
+    lines = [f"[Working Memory · {status.upper()} · {len(items)} items]"]
     for it in items:
-        lines.append(f"- [{it.id}] ({it.category}) {it.content} (created: {it.created_at[:10]})")
+        reason_str = f" [reason: {it.expire_reason}]" if getattr(it, "expire_reason", None) else ""
+        lines.append(f"- [{it.id}] ({it.category}) {it.content} (updated: {it.updated_at}){reason_str}")
     return "\n".join(lines)
 
 

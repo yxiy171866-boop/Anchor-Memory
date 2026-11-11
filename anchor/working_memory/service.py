@@ -22,6 +22,27 @@ except ImportError:
 logger = logging.getLogger("anchor.working_memory")
 
 
+def _format_buffer_countdown(expired_at_str: Optional[str], buffer_days: int = 2) -> str:
+    """Format remaining countdown before an expired buffer item is archived."""
+    if not expired_at_str:
+        return "Expired · In Buffer"
+    try:
+        exp_dt = datetime.strptime(expired_at_str, "%Y-%m-%d %H:%M:%S")
+        total_seconds = buffer_days * 86400
+        passed_seconds = (datetime.now() - exp_dt).total_seconds()
+        remaining_seconds = total_seconds - passed_seconds
+        if remaining_seconds <= 0:
+            return "Expired · Archiving Soon"
+        remaining_hours = int(remaining_seconds // 3600)
+        if remaining_hours >= 24:
+            days = remaining_hours // 24
+            hours = remaining_hours % 24
+            return f"Expired · {days}d {hours}h until archive"
+        return f"Expired · {remaining_hours}h until archive"
+    except Exception:
+        return "Expired · In Buffer"
+
+
 class WorkingMemoryService:
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path
@@ -221,13 +242,30 @@ class WorkingMemoryService:
         return count
 
     def format_for_context(self) -> str:
-        """Format active items as a concise markdown block for prompt pre-injection."""
-        items = self.get_active_items()
-        if not items:
+        """Format active items and 2-day expired buffer items with countdowns for prompt pre-injection."""
+        active_items = self.get_active_items()
+        buffer_items = self.get_expired_buffer()
+
+        if not active_items and not buffer_items:
             return ""
 
-        lines = ["[Current Working Memory · 前额叶实时背景 (进行中状态)]"]
-        for it in items:
-            date_str = it.created_at[:10] if it.created_at else ""
-            lines.append(f"- [ID: {it.id} | {it.category}] {it.content} ({date_str})")
+        lines = ["[Current Working Memory · Active Context & Buffer]"]
+
+        # 1. Active items
+        if active_items:
+            lines.append("* Active Items (In Progress):")
+            for it in active_items:
+                date_str = it.created_at[:10] if it.created_at else ""
+                lines.append(f"- [ID: {it.id} | {it.category}] {it.content} ({date_str})")
+        else:
+            lines.append("* Active Items: (none currently active)")
+
+        # 2. Expired buffer items (recoverable via restore tool)
+        if buffer_items:
+            lines.append("\n* Expired Buffer (Call working_memory_restore within 2 days to recover, auto-archived afterwards):")
+            for it in buffer_items:
+                countdown_tag = _format_buffer_countdown(it.expired_at, getattr(it, "auto_clear_after_days", 2) or 2)
+                reason_str = f" [Reason: {it.expire_reason}]" if getattr(it, "expire_reason", None) else ""
+                lines.append(f"- [ID: {it.id} | {countdown_tag}{reason_str}] {it.content}")
+
         return "\n".join(lines)

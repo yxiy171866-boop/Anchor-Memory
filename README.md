@@ -260,7 +260,23 @@ context_block = injector.build_context_block(
 
 ---
 
-## 8. 开源许可 (License)
+## 8. 更新日志 (Changelog)
+
+### [2026-11-11]
+- **前额叶过期缓冲池全透明化与倒计时注入 (Transparent Expired Buffer with Countdown)**：
+  - 解决“误判救援按钮缺乏上下文感知”的黑匣子问题：在 `format_for_context()` 注入时，除了活跃事项，一并将处于 2 天缓冲期内的事项结构化注入至 Prompt 顶层，并动态计算剩余有效倒计时（如 `[Expired · 1d 17h until archive]` 及办结原因）。
+  - 模型在每轮会话中无需调用查询工具即可看清刚办结的事项与具体 ID，发现误判时可即时调用 `working_memory_restore` 救回。
+  - 重新梳理 `working_memory_list` 工具定位，明确日常上下文已全量自动呈现，该工具主要供按需审查与历史归档查询使用。
+- **程序性记忆（Procedural Guides）智能防重与增量合并 (Deduplication & Addendum)**：
+  - 在 `create_guide` 中引入多语言情境关键词与概念重合度检测，针对相近场景重复沉淀规则时，自动避免重复建卡，智能增量合并要领与避坑禁忌并刷新更新时间。
+  - 新增 `procedural_guide_delete` 与 `procedural_guide_list` 完整生命周期管理工具。
+- **数据库升级平滑迁移 (Zero-Migration Barrier)**：
+  - `get_db` 启动时自动检查并安全执行 `ALTER TABLE ADD COLUMN` 迁移（补全 `is_protected`、`archived_at` 等字段），保障旧版本用户开箱即用。
+  - 修复跨模块向量元组解包、午夜审计结果字典校验与 Markdown 镜像用户笔记分离机制。
+
+---
+
+## 9. 开源许可 (License)
 
 本项目遵循 [MIT License](LICENSE)。欢迎提交 Issue 与 Pull Request。
 
