@@ -26,12 +26,14 @@ Anchor Memory 是一个面向大语言模型（LLM）对话与伴侣系统的本
   - [4.2 前端服务启动与 API 对接](#42-前端服务启动与-api-对接)
 - [5. 快速部署与接入指南](#5-快速部署与接入指南)
   - [5.1 环境要求与依赖安装](#51-环境要求与依赖安装)
-  - [5.2 独立启动 MCP 服务](#52-独立启动-mcp-服务)
-  - [5.3 接入 Claude Desktop 或其他 MCP 客户端](#53-接入-claude-desktop-或其他-mcp-客户端)
-  - [5.4 作为 Python 库直接嵌入现有项目](#54-作为-python-库直接嵌入现有项目)
+  - [5.2 运行自动化测试套件](#52-运行自动化测试套件)
+  - [5.3 独立启动 MCP 服务](#53-独立启动-mcp-服务)
+  - [5.4 接入 Claude Desktop 或其他 MCP 客户端](#54-接入-claude-desktop-或其他-mcp-客户端)
+  - [5.5 作为 Python 库直接嵌入现有项目](#55-作为-python-库直接嵌入现有项目)
 - [6. 配置项说明 (Environment Variables)](#6-配置项说明-environment-variables)
 - [7. 本地数据存储与安全说明](#7-本地数据存储与安全说明)
-- [8. 开源许可 (License)](#8-开源许可-license)
+- [8. 更新日志 (Changelog)](#8-更新日志-changelog)
+- [9. 开源许可 (License)](#9-开源许可-license)
 
 ---
 
