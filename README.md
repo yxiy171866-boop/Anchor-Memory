@@ -263,3 +263,8 @@ context_block = injector.build_context_block(
 ## 8. 开源许可 (License)
 
 本项目遵循 [MIT License](LICENSE)。欢迎提交 Issue 与 Pull Request。
+
+---
+
+Designed by Lumi&Daemon.  
+Built at D-Home.
