@@ -316,34 +316,52 @@ async def procedural_guide_create(situation: str, playbook: str, taboos: str) ->
 
     Records the best response strategy and absolute taboos for a specific
     recurring situation, so the companion can respond appropriately when
-    that situation is detected.
+    that situation is detected. Features automatic deduplication to merge
+    with existing guidelines if a similar situation already exists.
 
     Parameters:
     - situation: Trigger situation description (e.g. 'when user is feeling anxious')
     - playbook: Best response strategy and tone guidance
     - taboos: Absolute things to avoid saying or doing in this situation
     """
-    guide = guide_service.create_guide(situation=situation, playbook=playbook, taboos=taboos)
+    guide = guide_service.create_guide(situation=situation, playbook=playbook, taboos=taboos, deduplicate=True)
+    if getattr(guide, "_is_updated", False):
+        return f"Existing similar guide detected and updated [{guide.id}] for situation: '{guide.situation}'"
     return f"Procedural guide created [{guide.id}] for situation: '{guide.situation}'"
 
 
 @mcp.tool()
 async def procedural_guide_update(
     guide_id: str,
+    situation: Optional[str] = None,
     playbook: Optional[str] = None,
     taboos: Optional[str] = None
 ) -> str:
-    """Update an existing behavior guide's strategy or taboos.
+    """Update an existing behavior guide's situation, strategy or taboos.
 
     Parameters:
     - guide_id: Guide ID
+    - situation: Updated situation description (optional)
     - playbook: Updated response strategy (optional)
     - taboos: Updated taboos list (optional)
     """
-    guide = guide_service.update_guide(guide_id=guide_id, playbook=playbook, taboos=taboos)
+    guide = guide_service.update_guide(guide_id=guide_id, situation=situation, playbook=playbook, taboos=taboos)
     if guide:
         return f"Procedural guide [{guide.id}] updated (situation: {guide.situation})."
     return f"Update failed: guide [{guide_id}] not found."
+
+
+@mcp.tool()
+async def procedural_guide_delete(guide_id: str) -> str:
+    """Delete a procedural behavior guide by ID.
+
+    Parameters:
+    - guide_id: Guide ID (e.g. guide_a3019952)
+    """
+    ok = guide_service.delete_guide(guide_id)
+    if ok:
+        return f"Procedural guide [{guide_id}] deleted successfully."
+    return f"Delete failed: guide [{guide_id}] not found."
 
 
 if __name__ == "__main__":

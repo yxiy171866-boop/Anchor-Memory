@@ -178,6 +178,32 @@ class TestAnchorMemory(unittest.TestCase):
         res = auditor.audit_and_purge(resolved_items=[{"id": "non_existent_id", "reason": "test"}])
         self.assertEqual(res["expired_count"], 0)
 
+    def test_procedural_guide_deduplication_and_delete(self):
+        from anchor.procedural.guide_service import ProceduralGuideService
+        svc = ProceduralGuideService(db_path=self.db_path)
+        g1 = svc.create_guide(
+            situation="when user is feeling anxious about work",
+            playbook="listen gently and validate feelings",
+            taboos="never say 'just calm down'"
+        )
+        self.assertFalse(getattr(g1, "_is_updated", False))
+
+        # Similar situation should be deduplicated and merged
+        g2 = svc.create_guide(
+            situation="when user feels anxious",
+            playbook="stay present and offer a hug",
+            taboos="avoid lecturing"
+        )
+        self.assertEqual(g1.id, g2.id)
+        self.assertTrue(getattr(g2, "_is_updated", False))
+        self.assertIn("listen gently", g2.playbook)
+        self.assertIn("stay present", g2.playbook)
+
+        # Deletion
+        ok = svc.delete_guide(g1.id)
+        self.assertTrue(ok)
+        self.assertEqual(len(svc.get_all_guides()), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
