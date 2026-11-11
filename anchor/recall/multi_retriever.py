@@ -97,9 +97,10 @@ class MultiWayRetriever:
             return {}
 
         query_vec = self.embedder.get_embedding_vector(query)
+        query_dim = len(query_vec)
         scores = {}
         for mem in memories:
-            mem_vec = self.embedder.get_cached_embedding(mem["id"], mem["content"])
+            mem_vec = self.embedder.get_cached_embedding(mem["id"], mem["content"], expected_dim=query_dim)
             scores[mem["id"]] = self.embedder.cosine_similarity(query_vec, mem_vec)
         return scores
 

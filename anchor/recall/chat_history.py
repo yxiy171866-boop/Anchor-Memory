@@ -102,7 +102,7 @@ class ConversationSearchTool:
             start_time = self._scope_to_start_time(scope)
 
         query_tokens = _tokenize(query)
-        query_vec = self.embedder.get_embedding(query)
+        query_vec = self.embedder.get_embedding_vector(query)
 
         try:
             with sqlite3.connect(str(self.chat_db_path), timeout=5.0) as conn:
@@ -138,7 +138,7 @@ class ConversationSearchTool:
         for r in rows:
             content = r["content"] or ""
             kw_score = _keyword_score(query_tokens, content)
-            msg_vec = self.embedder.get_embedding(content)
+            msg_vec = self.embedder.get_embedding_vector(content)
             sem_score = self.embedder.cosine_similarity(query_vec, msg_vec)
 
             # Combined score

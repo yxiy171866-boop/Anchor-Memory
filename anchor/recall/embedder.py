@@ -112,8 +112,8 @@ class AnchorEmbedder:
             )
         return vector
 
-    def get_cached_embedding(self, memory_id: str, content: str) -> List[float]:
-        """Retrieve cached embedding if valid and matching active model dimension, or recompute."""
+    def get_cached_embedding(self, memory_id: str, content: str, expected_dim: Optional[int] = None) -> List[float]:
+        """Retrieve cached embedding if valid, matching active model dimension and expected dimension, or recompute."""
         content_hash = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
         with self._db() as conn:
             cursor = conn.cursor()
@@ -125,7 +125,8 @@ class AnchorEmbedder:
             if row and row["content_hash"] == content_hash:
                 try:
                     loaded = json.loads(row["vector_json"])
-                    if len(loaded) == (row["dimension"] or len(loaded)):
+                    dim_match = (expected_dim is None) or (len(loaded) == expected_dim)
+                    if dim_match and len(loaded) == (row["dimension"] or len(loaded)):
                         return loaded
                 except Exception:
                     pass

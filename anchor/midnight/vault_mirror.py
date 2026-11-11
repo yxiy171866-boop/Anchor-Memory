@@ -1,12 +1,13 @@
-"""Anchor Midnight Step 6 - Obsidian Vault Mirror with Annotation Protection.
+"""Anchor Midnight Step 6 - Obsidian Vault Mirror with Explicit User Notes Area.
 
 Writes long-term memories as Markdown files to a local vault directory.
-PROTECTION GUARANTEE: If a file already exists and contains manual user notes
-under '## Notes' or '## User Notes', existing notes are preserved and never wiped.
+PROTECTION GUARANTEE:
+- The '## Memory Notes' section holds database annotations (synced cleanly).
+- The '## User Notes' section is reserved strictly for manual human edits in Obsidian
+  and is NEVER overwritten or removed.
 """
 import logging
 import json
-import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -29,26 +30,26 @@ class VaultMirror:
     def _db(self):
         return get_db(self.db_path)
 
-    def _extract_existing_user_notes(self, file_path: Path) -> List[str]:
-        """Extract existing notes from Markdown file to prevent overwriting user annotations."""
+    def _extract_existing_user_notes(self, file_path: Path) -> str:
+        """Extract existing notes from '## User Notes' to prevent overwriting user edits."""
         if not file_path.exists():
-            return []
+            return ""
         try:
             content = file_path.read_text(encoding="utf-8")
-            if "## Notes" in content:
-                parts = content.split("## Notes", 1)
-                return [parts[1].strip()]
+            if "## User Notes" in content:
+                parts = content.split("## User Notes", 1)
+                return parts[1].strip()
         except Exception:
             pass
-        return []
+        return ""
 
     def _memory_to_markdown(
         self,
         mem: Dict[str, Any],
         db_notes: List[Dict[str, Any]],
-        existing_notes_text: Optional[str] = None
+        existing_user_notes: str = ""
     ) -> str:
-        """Render a memory dict as a Markdown document preserving user additions."""
+        """Render a memory dict as a Markdown document."""
         lines = [
             f"---",
             f"id: {mem['id']}",
@@ -80,23 +81,30 @@ class VaultMirror:
             lines.append(f"**Entities:** {', '.join(str(e) for e in entities)}")
             lines.append("")
 
-        lines.append("## Notes")
-        if existing_notes_text:
-            lines.append(existing_notes_text)
-        elif db_notes:
+        # 1. System/Companion Notes (from DB)
+        lines.append("## Memory Notes")
+        if db_notes:
             for note in db_notes:
                 author = note.get("author", "unknown")
                 created = note.get("created_at", "")[:10]
                 content = note.get("content", "")
                 lines.append(f"- **[{author}]** ({created}): {content}")
         else:
-            lines.append("- *(No notes yet)*")
+            lines.append("- *(No memory notes recorded)*")
+        lines.append("")
+
+        # 2. User Notes (Dedicated human notes area in Obsidian)
+        lines.append("## User Notes")
+        if existing_user_notes:
+            lines.append(existing_user_notes)
+        else:
+            lines.append("<!-- Add your private manual annotations here; they will never be overwritten. -->")
         lines.append("")
 
         return "\n".join(lines)
 
     def sync_memory(self, memory_id: str) -> bool:
-        """Write a single memory to the vault while safely preserving existing manual annotations."""
+        """Write memory to vault, syncing DB notes while preserving '## User Notes'."""
         self.vault_path.mkdir(parents=True, exist_ok=True)
 
         with self._db() as conn:
@@ -116,11 +124,8 @@ class VaultMirror:
         safe_name = memory_id.replace("/", "_").replace("\\", "_")
         file_path = self.vault_path / f"{safe_name}.md"
 
-        # Check existing notes to preserve
-        existing_notes = self._extract_existing_user_notes(file_path)
-        existing_notes_text = existing_notes[0] if existing_notes else None
-
-        content = self._memory_to_markdown(mem, db_notes, existing_notes_text)
+        existing_user_notes = self._extract_existing_user_notes(file_path)
+        content = self._memory_to_markdown(mem, db_notes, existing_user_notes)
 
         try:
             file_path.write_text(content, encoding="utf-8")

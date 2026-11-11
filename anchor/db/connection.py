@@ -144,6 +144,11 @@ def get_db(db_path: str = ANCHOR_DB_PATH) -> Generator[sqlite3.Connection, None,
         init_db(db_path)
     conn = sqlite3.connect(db_path, timeout=10.0)
     _configure_connection(conn)
+    try:
+        from anchor.db.migration import migrate_db
+        migrate_db(conn)
+    except Exception as me:
+        logger.debug(f'Migration hook check: {me}')
     conn.row_factory = sqlite3.Row
     try:
         yield conn

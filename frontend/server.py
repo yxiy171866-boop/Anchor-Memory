@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """Lightweight Backend Server for Anchor Settings Web Panel.
 
-Serves the frontend static files and provides the REST API endpoints:
+Serves the frontend static files securely (bound to 127.0.0.1 by default)
+and provides the REST API endpoints:
 - GET  /api/anchor/settings
 - POST /api/anchor/settings
 
 Usage:
-    python frontend/server.py [--port 8765]
+    python frontend/server.py [--port 8765] [--host 127.0.0.1]
 """
 import sys
 import json
@@ -31,7 +32,6 @@ class AnchorSettingsHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/anchor/settings":
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             settings = get_all_settings()
             self.wfile.write(json.dumps(settings, ensure_ascii=False).encode("utf-8"))
@@ -49,7 +49,6 @@ class AnchorSettingsHandler(SimpleHTTPRequestHandler):
 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"success": True}).encode("utf-8"))
             except Exception as e:
@@ -61,23 +60,17 @@ class AnchorSettingsHandler(SimpleHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.end_headers()
 
-
-def run(port: int = 8765):
-    server_address = ("", port)
+def run(host: str = "127.0.0.1", port: int = 8765):
+    server_address = (host, port)
     httpd = HTTPServer(server_address, AnchorSettingsHandler)
-    print(f"Anchor Settings Web UI running at http://localhost:{port}")
+    print(f"Anchor Settings Web UI securely running at http://{host}:{port}")
     httpd.serve_forever()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Anchor Settings HTTP Server")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="Port to listen on (default: 8765)")
     args = parser.parse_args()
-    run(port=args.port)
+    run(host=args.host, port=args.port)

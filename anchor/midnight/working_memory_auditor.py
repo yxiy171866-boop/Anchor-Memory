@@ -41,7 +41,7 @@ class WorkingMemoryAuditor:
             reason = item.get("reason", "resolved at midnight consolidation")
             if item_id:
                 ok = self.wm_service.expire_item(item_id=item_id, reason=reason)
-                if ok:
+                if ok and ok.get("success"): 
                     expired_count += 1
 
         # Add new commitments identified during consolidation
