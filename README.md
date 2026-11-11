@@ -16,14 +16,14 @@ Anchor Memory 是一个面向大语言模型（LLM）对话与伴侣系统的本
   - [1.5 每日复盘与对话压缩机制 (Consolidation Pipeline)](#15-每日复盘与对话压缩机制-consolidation-pipeline)
   - [1.6 本地 Markdown 镜像 (Obsidian Vault Mirror)](#16-本地-markdown-镜像-obsidian-vault-mirror)
 - [2. 记忆召回引擎 (4-Path Recall)](#2-记忆召回引擎-4-path-recall)
-- [3. MCP 工具体系全览 (12 核心工具)](#3-mcp-工具体系全览-12-核心工具)
-  - [3.1 工作记忆类工具 (4 个)](#31-工作记忆类工具-4-个)
+- [3. MCP 工具体系全览 (14 核心工具)](#3-mcp-工具体系全览-14-核心工具)
+  - [3.1 工作记忆类工具 (5 个)](#31-工作记忆类工具-5-个)
   - [3.2 长期记忆类工具 (5 个)](#32-长期记忆类工具-5-个)
   - [3.3 历史聊天记录检索工具 (1 个)](#33-历史聊天记录检索工具-1-个)
-  - [3.4 行为指南类工具 (2 个)](#34-行为指南类工具-2-个)
-- [4. 前端设置面板 (Frontend Web UI)](#4-前端设置面板-frontend-web-ui)
+  - [3.4 行为指南类工具 (3 个)](#34-行为指南类工具-3-个)
+- [4. 前端设置面板 (Frontend Web UI & API)](#4-前端设置面板-frontend-web-ui--api)
   - [4.1 前端功能模块说明](#41-前端功能模块说明)
-  - [4.2 前端代码使用与集成方法](#42-前端代码使用与集成方法)
+  - [4.2 前端服务启动与 API 对接](#42-前端服务启动与-api-对接)
 - [5. 快速部署与接入指南](#5-快速部署与接入指南)
   - [5.1 环境要求与依赖安装](#51-环境要求与依赖安装)
   - [5.2 独立启动 MCP 服务](#52-独立启动-mcp-服务)
@@ -48,13 +48,13 @@ Anchor Memory 的核心设计目标是解决传统记忆方案“单向搜索慢
          ▼                         ▼                         ▼
  ┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
  │  前额叶工作台   │       │  4路混合召回引擎 │       │  情境行为指南   │
- │ Working Memory  │       │ (语义/实体/     │       │ Procedural      │
+ │ Working Memory  │       │ (语义/中文实体/ │       │ Procedural      │
  │ (活跃未竟状态)  │       │  情绪/新近度)   │       │ Playbook        │
  └────────┬────────┘       └────────┬────────┘       └────────┬────────┘
           │                         │                         │
           └─────────────────────────┼─────────────────────────┘
                                     ▼
-                     [ 结构化上下文无损注入 Prompt ]
+                     [ 结构化上下文安全注入 Prompt ]
                                     │
                                [ 智能体交互 ]
                                     │
@@ -62,26 +62,30 @@ Anchor Memory 的核心设计目标是解决传统记忆方案“单向搜索慢
                      ┌───────────────────────────────┐
                      │     每日复盘流水线 (Midnight)   │
                      │  - 全天心境经历长文叙事压缩    │
-                     │  - 情绪坐标计算与新记忆抽取    │
-                     │  - 前额叶审计与 2 天缓冲期驱逐  │
+                     │  - 情绪坐标计算与溯源记忆抽取  │
+                     │  - 前额叶审计与安全归档        │
                      │  - 艾宾浩斯情绪半衰期衰减重算  │
-                     │  - 本地 Markdown Vault 双向同步│
+                     │  - 本地 Markdown 保留用户笔记同步│
                      └───────────────────────────────┘
 ```
 
 ### 1.2 前额叶工作台 (Working Memory / 未竟之事)
 - **定位**：模拟大脑前额叶皮层，专门承载“当前阶段持续需要关注的短期背景状态”（如近期身体状况、正在推进中的事项、承诺与待办）。
 - **常驻注入**：前额叶中所有处于 `active` 状态的事项，**无需搜索，每轮对话都会作为背景常驻注入 Prompt**，保证模型永远对近期的关键状态保持清晰认知。
-- **2 天防误判缓冲池**：当某事项被办结或标记过期时，系统绝不直接从数据库中物理删除，而是将其状态标记为 `expired` 并保留 2 天。在此期间如果发现是模型误判，可随时调用 `working_memory_restore` 工具重新恢复为活跃状态。
+- **2 天防误判缓冲池与零物理删除**：
+  - 当某事项办结时，调用 `working_memory_expire` 必须提供**精确 ID**（若 ID 错误会返回活跃条目候选列表供确认，禁止模糊匹配误伤）；
+  - 事项转入 `expired` 缓冲池保留 2 天。若属误判，可随时调用 `working_memory_restore` 恢复；
+  - 缓冲期结束后，系统将其转入 `archived`（历史归档）状态，**严禁物理硬删除 (Hard DELETE)**，数据永久安全留存。
 
 ### 1.3 长期记忆库与情绪半衰期衰减 (Long-Term Memory)
-每一条沉淀到长期库的记忆均附带三维物理情绪坐标：
-- **重要度 (Importance)**：0.0 ~ 1.0。若重要度 $\ge 0.8$（核心记忆/重要约定），享有底线保护（Retention Floor $\ge 0.5$），永远不会因为时间推移而彻底归零。
+每一条沉淀到长期库的记忆均附带三维物理情绪坐标与溯源信息：
+- **重要度 (Importance)**：0.0 ~ 1.0（支持合法的 0.0）。若重要度 $\ge 0.8$ 或标记了 `is_protected = 1`，享有底线保护（Retention Floor $\ge 0.5$），永远不会因为时间推移而彻底归零。
+- **核心记忆保护机制 (`is_protected`)**：对于重要身份、核心约定打上硬保护标，底层拒绝任何自动 supersede 或降级操作。
 - **情绪愉悦度 (Valence)**：-1.0（负向情绪/委屈/痛苦）至 +1.0（正向情绪/喜悦/感动）。
 - **情绪激烈度 (Arousal)**：0.0（平静日常）至 1.0（剧烈激动/深刻触动）。
-- **遗忘曲线模型**：结合情绪唤醒度与艾宾浩斯遗忘定律，情绪越激烈（Arousal 越高）的经历，半衰期越长：
-  $$\lambda = \text{base\_}\lambda \times (1 + \text{arousal} \times k)$$
-  $$\text{EffectiveWeight} = \text{importance} \times e^{-\frac{\text{days}}{\lambda}}$$
+- **真实半衰期衰减公式**：结合情绪唤醒度与放射性/遗忘半衰期定律：
+  $$T_{1/2} = \text{base\_half\_life} \times (1 + \text{arousal} \times k)$$
+  $$\text{EffectiveWeight} = \text{importance} \times 2^{-\frac{\text{days}}{T_{1/2}}} = \text{importance} \times e^{-\frac{\text{days} \cdot \ln 2}{T_{1/2}}}$$
   日常琐碎在数周后自然平滑降权，重要记忆长期保持活跃。衰减仅调整检索召回时的排序打分，原始记忆数据在本地永久保留。
 
 ### 1.4 程序性行为指南 (Procedural Guides)
@@ -91,15 +95,15 @@ Anchor Memory 的核心设计目标是解决传统记忆方案“单向搜索慢
 ### 1.5 每日复盘与对话压缩机制 (Consolidation Pipeline)
 每日深夜或对话空闲阶段，系统可自动或手动执行复盘流水线：
 1. **全天心境叙事压缩**：将全天分散的聊天记录归纳为一段 500~800 字的第一人称心境与经历长文叙事，第二天唤醒时作为昨日背景注入，保持对话的连续感。
-2. **长期记忆沉淀与情绪估算**：从全天对话中抽取值得铭记的事实与经历，自动补齐情绪坐标并入库。
-3. **前额叶清算**：标记办结事项，超出 2 天缓冲期的过期条目平稳清理。
-4. **醒来便签 (Wake Note)**：为第二天生成一份精炼的晨间关注点备忘录。
-5. **衰减打分重算**：每日对所有长期记忆重新计算 Retention Weight。
+2. **长期记忆抽取与来源追溯 (Provenance)**：从对话中抽取的每条记忆均记录 `source_message_id`、`source_date` 与 `confidence`，支持追溯原始聊天出处。
+3. **前额叶清算**：自动检查超时活跃事项，超出缓冲池的过期条目安全移入 `archived` 归档。
+4. **醒来便签 (Wake Note)**：生成一份精炼的晨间关注点备忘录，次日清晨优先注入。
+5. **衰减打分单事务重算**：每日对所有长期记忆在一个 SQLite 事务内原子重算，效率高且安全。
 
 ### 1.6 本地 Markdown 镜像 (Obsidian Vault Mirror)
 - 所有沉淀的长期记忆和每日复盘摘要，均会以纯文本 Markdown 格式输出至本地镜像目录。
-- 采用规范的 YAML Frontmatter（记录 ID、重要度、情绪值、标签等）。
-- 完美兼容 Obsidian、Logseq 等本地双链笔记工具，用户可以直接查看、编辑卡片或手写批注。
+- **用户手写笔记保护**：增量同步时自动检测文件中的 `## Notes` 区域，**绝不覆盖用户在 Obsidian 里手动追加的批注和手写内容**。
+- 采用规范的 YAML Frontmatter，兼容 Obsidian、Logseq 等本地双链笔记工具。
 
 ---
 
@@ -107,82 +111,63 @@ Anchor Memory 的核心设计目标是解决传统记忆方案“单向搜索慢
 
 Anchor Memory 采用 4 路独立信号加权综合重排算法，全面平衡语义契合与情感关联：
 
-$$\text{FinalScore} = (w_{sem} \cdot S_{sem} + w_{ent} \cdot S_{ent} + w_{emo} \cdot S_{emo} + w_{rec} \cdot S_{rec}) \times \text{DecayScore}$$
+$$\text{CompositeScore} = w_{sem} \cdot S_{sem} + w_{ent} \cdot S_{ent} + w_{emo} \cdot S_{emo} + w_{rec} \cdot S_{rec}$$
+$$\text{FinalScore} = \text{CompositeScore} \times \text{DecayScore}$$
 
-- **语义相似度 ($S_{sem}$，权重 0.40)**：计算输入与记忆文本的向量余弦距离。支持配置外部 Embedding API，并在无外网时自动降级到本地字符级向量算法。
-- **实体命中率 ($S_{ent}$，权重 0.30)**：精准比对关键人名、地名、核心事实词汇。
+- **语义相似度 ($S_{sem}$，权重 0.40)**：计算输入与记忆文本的向量余弦距离。支持配置外部 Embedding API，并在无外网时自动降级到本地字符级向量算法（缓存表自带模型与维度校验，防止混维）。
+- **中文与英文实体命中率 ($S_{ent}$，权重 0.30)**：集成成熟的中文 2/3/4-gram 分词器与停用词过滤，中英文混排对话均能实现精准的实体片段交集匹配。
 - **情绪近邻度 ($S_{emo}$，权重 0.15)**：在 Valence-Arousal 二维平面上的欧氏空间距离，优先唤醒同频心境的经历。
-- **时效新近度 ($S_{rec}$，权重 0.15)**：30 天平滑指数衰减，优先捕捉近期被提及或新沉淀的内容。
+- **时效新近度 ($S_{rec}$，权重 0.15)**：基于 `last_accessed_at` 的访问热度给予短期唤醒加权，不与长期的自然遗忘曲线发生双重惩罚。
+- **门槛解耦**：0.35 门槛仅卡 CompositeScore（过滤无关噪音），排序由 FinalScore 负责，避免较早但重要的记忆被强行过滤。
 
 ---
 
-## 3. MCP 工具体系全览 (12 核心工具)
+## 3. MCP 工具体系全览 (14 核心工具)
 
-系统通过标准 MCP 协议向大语言模型暴露 12 个原子工具：
+系统通过标准 MCP 协议向大语言模型暴露 14 个原子工具：
 
-### 3.1 工作记忆类工具 (4 个)
+### 3.1 工作记忆类工具 (5 个)
+- **`working_memory_list`**：列出当前前额叶所有活跃事项及其具体 ID 与类别（让模型直观感知当前进行中状态）。
 - **`working_memory_add`**：添加一条当前这几天需要持续关注的短期状态、承诺或未竟事项。
-  - 参数：`content` (描述), `category` ('todo' | 'state' | 'promise' | 'general')
 - **`working_memory_update`**：更新既有未竟事项的进展细节或补充最新动态。
-  - 参数：`item_id` (条目ID), `content` (更新后的描述)
-- **`working_memory_expire`**：将办结或无需再关注的事项标记为过期并移入 2 天缓冲池（非物理删除）。
-  - 参数：`item_id` (条目ID), `reason` (办结原因)
+- **`working_memory_expire`**：将办结事项标记为过期并移入 2 天缓冲池（要求精确 ID，输入错误返回候选项）。
 - **`working_memory_restore`**：误判救援：将处于过期缓冲池中的事项重新捞回为活跃关注状态。
-  - 参数：`item_id` (条目ID), `restore_reason` (恢复原因说明)
 
 ### 3.2 长期记忆类工具 (5 个)
-- **`memory_create`**：沉淀具备长期留存价值的生活经历、身份事实、伴侣偏好或核心承诺。
-  - 参数：`content`, `category`, `importance` (0.0~1.0), `valence` (-1.0~+1.0), `arousal` (0.0~1.0), `emotion_label`, `entities`, `links`
+- **`memory_create`**：沉淀具备长期留存价值的生活经历、身份事实、伴侣偏好或核心承诺（支持 `is_protected` 硬保护）。
 - **`memory_update`**：修正或更正既有长期记忆的文字细节。
-  - 参数：`memory_id`, `content`
 - **`memory_add_note`**：记忆双向追加备注：为已有记忆挂载后续心境、进展或感受补充，不破坏原记忆文本。
-  - 参数：`memory_id`, `content`
-- **`memory_supersede`**：新事实更迭：用新记忆取代旧记忆，旧记忆自动打标为 superseded 历史版本存留。
-  - 参数：`old_memory_id`, `new_content`, `reason`
+- **`memory_supersede`**：新事实更迭：用新记忆取代旧记忆，旧记忆自动打标为 superseded 历史版本存留（受保护记忆禁止误更迭）。
 - **`anchor_memory_search`**：按需主动深度检索长期记忆库（4 路加权重排）。
-  - 参数：`query`, `limit` (默认 4)
 
 ### 3.3 历史聊天记录检索工具 (1 个)
 - **`search_conversation`**：根据关键词、语义以及具体日期范围检索历史聊天记录。
-  - 参数：
-    - `query`: 检索词或句子
-    - `scope`: 时间跨度范围，可选 `'recent'` (3天) \| `'7d'` (7天) \| `'30d'` (30天) \| `'90d'` (90天) \| `'all'` (全量历史)
-    - `start_date`: 起始日期过滤，格式 `YYYY-MM-DD`（可选，支持精细到某一天）
-    - `end_date`: 截止日期过滤，格式 `YYYY-MM-DD`（可选）
-    - `limit`: 返回条目数（默认 6，最多 20）
+  - 参数：`query`, `scope` ('recent' | '7d' | '30d' | '90d' | 'all'), `start_date` (YYYY-MM-DD), `end_date` (YYYY-MM-DD), `limit` (默认 6，最多 20)。
 
-### 3.4 行为指南类工具 (2 个)
+### 3.4 行为指南类工具 (3 个)
+- **`procedural_guide_list`**：列出当前已注册的所有行为指南清单与触发情境。
 - **`procedural_guide_create`**：录入特定情境下的最佳应对策略与绝对避雷禁区。
-  - 参数：`situation` (情境描述), `playbook` (策略与语气要求), `taboos` (绝对避雷行为与禁忌话术)
 - **`procedural_guide_update`**：微调或完善已有行为指南的策略与禁忌。
-  - 参数：`guide_id`, `playbook`, `taboos`
 
 ---
 
-## 4. 前端设置面板 (Frontend Web UI)
+## 4. 前端设置面板 (Frontend Web UI & API)
 
-本项目在 `frontend/index.html` 中提供了一个开箱即用的前端独立设置面板，用于配置记忆系统的运行参数。
+本项目在 `frontend/` 目录提供了完整的设置 UI 与轻量级后端 HTTP API 服务。
 
 ### 4.1 前端功能模块说明
-1. **睡前对话余温衔接 (Bedtime Tail Bridge)**：
-   - 支持开关配置。开启后，第二天唤醒时在昨日摘要下方额外拼接前一天临睡前的最后几句真实对话，保持语境连贯；
-   - 支持“按轮次截取（默认 4 轮）”或“按 Token 预算截取（默认 400 Tokens）”。
-2. **单日滚动对话压缩 (Daily Rolling Summary)**：
-   - 用于在交谈消息过多时手动触发摘要压缩，释放原始消息占用的上下文窗口。
-3. **老记忆情绪增量补齐 (Backfill)**：
-   - 针对从外部或旧系统导入的无情绪标签记忆，在打烊批处理时逐步补齐情绪数值；
-   - 支持配置每日批处理的最大条数（默认 10 条）。
-4. **记忆主动搜索工具模式 (Search Tool Mode)**：
-   - 基础 4 路召回每轮自动进行。该项控制模型自主搜索的权限：
-     - `on_demand` (默认推荐)：按需由模型自主决定是否调用 `anchor_memory_search`；
-     - `always`：始终强制在每轮提示词中暴露搜索工具；
-     - `never`：完全禁用搜索工具（仅依赖前置自动注入）。
-5. **低权重沉底记忆管理 (Decay Archive)**：
-   - 浏览因时间衰减而沉底的低权重记忆，并可手动确认归档到 Vault，保持数据库整洁。
+1. **睡前对话余温衔接 (Bedtime Tail Bridge)**：控制次日唤醒是否拼接睡前对话片段，支持按轮数或 Token 预算截取。
+2. **单日滚动对话压缩 (Daily Rolling Summary)**：随时触发长对话滚动压缩，释放窗口空间。
+3. **老记忆情绪增量补齐 (Backfill)**：针对历史导入数据自动安全平滑补全情绪坐标。
+4. **记忆主动搜索工具模式 (Search Tool Mode)**：`on_demand` (推荐) \| `always` \| `never`。
+5. **低权重沉底记忆管理 (Decay Archive)**：查看沉底记忆并支持手动确认归档。
 
-### 4.2 前端代码使用与集成方法
-- **独立运行预览**：直接在浏览器中打开 `frontend/index.html` 即可预览完整 UI 交互。
-- **与你的系统对接**：前端页面内已封装统一的 RESTful 请求处理（`GET /api/anchor/settings` 与 `POST /api/anchor/settings`），修改 `index.html` 内的 `API_BASE` 变量即可对接到你自己的后端路由。
+### 4.2 前端服务启动与 API 对接
+启动自带的设置面板服务：
+```bash
+python frontend/server.py --port 8765
+```
+然后在浏览器访问 `http://localhost:8765` 即可实时查看并保存各项系统参数，所有修改即时持久化到 SQLite 的 `anchor_settings` 表中。
 
 ---
 
@@ -190,20 +175,26 @@ $$\text{FinalScore} = (w_{sem} \cdot S_{sem} + w_{ent} \cdot S_{ent} + w_{emo} \
 
 ### 5.1 环境要求与依赖安装
 - Python 3.10+
-- 安装极简依赖（仅依赖标准 MCP SDK 与 Pydantic）：
+- 运行依赖库安装：
   ```bash
   git clone https://github.com/yxiy171866-boop/Anchor-Memory.git
   cd Anchor-Memory
   pip install -r requirements.txt
   ```
 
-### 5.2 独立启动 MCP 服务
+### 5.2 运行自动化测试套件
+在提交或部署前，可运行测试套件验证中文分词、衰减公式与防删除特性：
+```bash
+python -m unittest discover -s tests -v
+```
+
+### 5.3 独立启动 MCP 服务
 ```bash
 python server.py
 ```
-首次启动时，系统会自动在 `./data/anchor_memory.db` 初始化包含 7 张表的 SQLite 数据库，并在 `./anchor_vault/` 建立 Obsidian 镜像目录。
+默认会在 `./data/anchor_memory.db` 自动初始化开启了 WAL 模式与外键约束的 SQLite 数据库。
 
-### 5.3 接入 Claude Desktop 或其他 MCP 客户端
+### 5.4 接入 Claude Desktop 或其他 MCP 客户端
 在 Claude Desktop 的配置文件（`claude_desktop_config.json`）中添加以下配置：
 
 ```json
@@ -223,23 +214,21 @@ python server.py
 }
 ```
 
-### 5.4 作为 Python 库直接嵌入现有项目
-如果不需要跑 MCP 独立进程，可以直接在你的 Python 对话服务中导入对应模块：
+### 5.5 作为 Python 库直接嵌入现有项目
+如果系统本身已有成熟的调度后端，可以直接导入作为底座引擎使用：
 
 ```python
-from anchor.working_memory.service import WorkingMemoryService
-from anchor.long_term.service import LongTermMemoryService
 from anchor.bridge.context_injector import AnchorContextInjector
 
-# 初始化
+# 初始化注入器
 injector = AnchorContextInjector(db_path="./data/anchor_memory.db")
 
-# 每轮对话开始前，获取要注入给模型的系统上下文
+# 每轮对话开始前，获取要注入给模型的系统上下文（包含防投毒隔离标记）
 context_block = injector.build_context_block(
     user_input="今天感觉有点着凉发烧了",
     top_k=4
 )
-# 将 context_block 直接加入到你的 System Prompt 中
+# 直接拼入 System Prompt
 ```
 
 ---
@@ -266,14 +255,11 @@ context_block = injector.build_context_block(
 
 - **零数据外发**：所有记忆条目、向量缓存、打烊复盘日志均只在本地 SQLite 及本地文件系统持久化，不上传任何第三方云端。
 - **数据更新安全**：后续如果从 GitHub 拉取 Anchor-Memory 的代码更新（`git pull`），由于数据库文件与 Vault 目录默认保存在独立路径或 `.gitignore` 排除目录中，**本地已有的记忆与聊天数据绝不会被覆盖或丢失**。
-- **可逆与防误删**：
-  - 前额叶具备 2 天缓冲期；
-  - 长期记忆支持版本更迭标记（`superseded`），旧事实永不物理丢失；
-  - 严禁大模型单方面物理删除长期记忆，保证回忆资产的安全可追溯。
+- **全面取消物理删除**：前额叶过期缓冲满后自动转为 `archived` 状态；长期记忆仅做状态更迭标记，回忆资产永久可溯。
+- **防提示注入与投毒**：注入上下文首尾打上了安全数据标记，明确区分背景数据与可执行系统指令。
 
 ---
 
 ## 8. 开源许可 (License)
 
 本项目遵循 [MIT License](LICENSE)。欢迎提交 Issue 与 Pull Request。
-EOF

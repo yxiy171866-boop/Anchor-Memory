@@ -3,7 +3,7 @@
 """Anchor Memory MCP Server.
 
 A local-first long-term memory system for AI companions.
-Provides 12 focused tools covering working memory, episodic/semantic
+Provides 14 focused tools covering working memory, episodic/semantic
 long-term memory, situation-aware procedural guides, and conversation history search.
 
 Usage:
@@ -52,6 +52,22 @@ guide_service = ProceduralGuideService()
 # ----------------- 1. Working Memory Tools -----------------
 
 @mcp.tool()
+async def working_memory_list() -> str:
+    """List all currently active items in working memory (prefrontal buffer).
+
+    Returns item IDs, categories, and descriptions so the model can inspect ongoing states.
+    """
+    items = wm_service.get_active_items()
+    if not items:
+        return "Working memory is currently empty (no active items)."
+
+    lines = [f"[Active Working Memory · {len(items)} items]"]
+    for it in items:
+        lines.append(f"- [{it.id}] ({it.category}) {it.content} (created: {it.created_at[:10]})")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 async def working_memory_add(content: str, category: str = "general") -> str:
     """Add a short-term ongoing item to working memory (prefrontal buffer).
 
@@ -82,20 +98,24 @@ async def working_memory_update(item_id: str, content: str) -> str:
 
 @mcp.tool()
 async def working_memory_expire(item_id: str, reason: str = "resolved") -> str:
-    """Mark a working memory item as resolved/expired.
+    """Mark a working memory item as resolved/expired (requires exact ID).
 
-    Items enter a 2-day buffer period before permanent deletion,
+    Items enter a 2-day buffer period before safe archiving,
     allowing recovery in case of false positives.
 
     Parameters:
-    - item_id: Item ID
+    - item_id: Exact Item ID (e.g. 'wm_1234567890')
     - reason: Why this item is being resolved or expired
     """
-    ok = wm_service.expire_item(item_id=item_id, reason=reason)
-    if ok:
+    res = wm_service.expire_item(item_id=item_id, reason=reason)
+    if res.get("success"):
         return (f"Item [{item_id}] marked as expired and moved to 2-day buffer "
                 f"(reason: {reason}). Call working_memory_restore if this was a mistake.")
-    return f"Expire failed: active item [{item_id}] not found."
+
+    candidates = res.get("candidates", [])
+    cand_str = "\n".join([f"  - [{c['id']}] {c['content']}" for c in candidates]) if candidates else "  (none)"
+    return (f"Expire failed: {res.get('error')}\n"
+            f"Active candidate items available to expire:\n{cand_str}")
 
 
 @mcp.tool()
@@ -109,7 +129,7 @@ async def working_memory_restore(item_id: str, restore_reason: str = "false posi
     item = wm_service.restore_item(item_id=item_id, restore_reason=restore_reason)
     if item:
         return f"Restored! Item [{item.id}] is active again (reason: {restore_reason})."
-    return f"Restore failed: item [{item_id}] not found or already past buffer period."
+    return f"Restore failed: item [{item_id}] not found in buffer or already past buffer period."
 
 
 # ----------------- 2. Long-term Memory Tools -----------------
@@ -122,10 +142,11 @@ async def memory_create(
     valence: float = 0.0,
     arousal: float = 0.0,
     emotion_label: str = "neutral",
+    is_protected: int = 0,
     entities: Optional[List[str]] = None,
     links: Optional[List[str]] = None
 ) -> str:
-    """Create a long-term memory with emotional coordinates.
+    """Create a long-term memory with emotional coordinates and optional protection.
 
     Use this to persist significant life events, facts, preferences, or
     commitments that should be remembered across sessions.
@@ -137,6 +158,7 @@ async def memory_create(
     - valence: Emotional valence (-1.0 negative ~ +1.0 positive)
     - arousal: Emotional intensity (0.0 calm ~ 1.0 intense)
     - emotion_label: Fine-grained emotion tag (e.g. 'joy', 'comfort', 'grief')
+    - is_protected: 1 = core/permanent protection (cannot be auto-superseded), 0 = normal
     - entities: Key person/place/thing entities mentioned
     - links: Related memory IDs
     """
@@ -147,10 +169,12 @@ async def memory_create(
         valence=valence,
         arousal=arousal,
         emotion_label=emotion_label,
+        is_protected=is_protected,
         entities=entities or [],
         links=links or []
     )
-    return f"Long-term memory created [{mem.id}] (category: {mem.category}, importance: {mem.importance}, emotion: {mem.emotion_label})"
+    return (f"Long-term memory created [{mem.id}] (category: {mem.category}, "
+            f"importance: {mem.importance}, emotion: {mem.emotion_label}, protected: {mem.is_protected})")
 
 
 @mcp.tool()
@@ -186,6 +210,7 @@ async def memory_supersede(old_memory_id: str, new_content: str, reason: str) ->
     """Replace an outdated memory with an updated version.
 
     The old memory is preserved as a 'superseded' historical record.
+    If the old memory is marked with is_protected=1, supersede is rejected for safety.
 
     Parameters:
     - old_memory_id: ID of the memory to be replaced
@@ -198,19 +223,19 @@ async def memory_supersede(old_memory_id: str, new_content: str, reason: str) ->
     if new_mem:
         return (f"Memory updated: new [{new_mem.id}] is active, "
                 f"old [{old_memory_id}] archived as historical version (reason: {reason}).")
-    return f"Supersede failed: memory [{old_memory_id}] not found."
+    return f"Supersede failed: memory [{old_memory_id}] not found or protected."
 
 
 @mcp.tool()
 async def anchor_memory_search(query: str, limit: int = 4) -> str:
-    """Search long-term memory using semantic + entity + emotion + recency recall.
+    """Search long-term memory using robust 4-way recall (semantic + Chinese n-gram entity + emotion + recency).
 
     Parameters:
     - query: Search query or question
     - limit: Number of results to return (default: 4)
     """
     res = search_tool.search(query=query, limit=limit)
-    if not res["results"]:
+    if not res.get("results"):
         return f"No memories found matching '{query}'."
 
     lines = [f"[Memory Search Results · {len(res['results'])} found]"]
@@ -271,6 +296,19 @@ async def search_conversation(
 
 
 # ----------------- 4. Procedural Memory Tools -----------------
+
+@mcp.tool()
+async def procedural_guide_list() -> str:
+    """List all registered procedural behavior guides (situations and response strategies)."""
+    guides = guide_service.get_all_guides()
+    if not guides:
+        return "No procedural guides registered yet."
+
+    lines = [f"[Procedural Guides · {len(guides)} registered]"]
+    for g in guides:
+        lines.append(f"- [{g.id}] Trigger: '{g.situation}' | Strategy: {g.playbook[:40]}...")
+    return "\n".join(lines)
+
 
 @mcp.tool()
 async def procedural_guide_create(situation: str, playbook: str, taboos: str) -> str:

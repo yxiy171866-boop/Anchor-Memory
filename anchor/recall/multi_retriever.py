@@ -1,16 +1,17 @@
 """Multi-Way Memory Retriever for Anchor.
 
-Provides four independent retrieval signals:
+Provides four independent retrieval signals with robust Chinese & Latin n-gram extraction:
 1. Semantic similarity (embedding cosine)
-2. Entity/keyword overlap
+2. Entity/keyword overlap (Chinese n-gram + Latin word tokens)
 3. Emotional coordinate proximity (valence + arousal distance)
-4. Recency score (exponential decay on age)
+4. Recency / interaction freshness (based on last_accessed_at)
 """
 import json
 import logging
 import math
+import re
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 
 try:
     from anchor.recall.embedder import AnchorEmbedder
@@ -22,6 +23,37 @@ except ImportError:
     from config import RECALL_MIN_SCORE_THRESHOLD
 
 logger = logging.getLogger("anchor.recall.retriever")
+
+LATIN_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)*")
+CHINESE_RUN_RE = re.compile(r"[\u3400-\u9fff]+")
+
+CHINESE_STOP_FRAGMENTS = {
+    "一个", "那个", "这个", "我们", "你们", "他们", "自己", "什么", "怎么",
+    "就是", "还是", "已经", "现在", "之前", "之后", "时候", "可以", "可能",
+    "因为", "所以", "但是", "然后", "一下", "一些", "有关", "关于", "喜欢"
+}
+
+
+def extract_robust_tokens(text: str) -> Set[str]:
+    """Extract Latin words and Chinese 2/3/4-grams from text to guarantee Chinese entity matching."""
+    if not text:
+        return set()
+    text = str(text)
+    tokens = set(item.lower() for item in LATIN_TOKEN_RE.findall(text))
+
+    for run in CHINESE_RUN_RE.findall(text):
+        length = len(run)
+        if length <= 4:
+            if run not in CHINESE_STOP_FRAGMENTS and len(run) >= 2:
+                tokens.add(run)
+        for size in (2, 3, 4):
+            if length < size:
+                continue
+            for index in range(length - size + 1):
+                frag = run[index:index + size]
+                if frag not in CHINESE_STOP_FRAGMENTS:
+                    tokens.add(frag)
+    return tokens
 
 
 class MultiWayRetriever:
@@ -41,7 +73,8 @@ class MultiWayRetriever:
             cursor.execute(
                 """
                 SELECT id, content, category, importance, valence, arousal,
-                       emotion_label, entities, decay_score, created_at, last_accessed_at
+                       emotion_label, entities, decay_score, is_protected,
+                       created_at, last_accessed_at
                 FROM anchor_memories
                 WHERE status = 'active'
                 ORDER BY decay_score DESC
@@ -63,7 +96,7 @@ class MultiWayRetriever:
         if not query or not memories:
             return {}
 
-        query_vec = self.embedder.get_embedding(query)
+        query_vec = self.embedder.get_embedding_vector(query)
         scores = {}
         for mem in memories:
             mem_vec = self.embedder.get_cached_embedding(mem["id"], mem["content"])
@@ -71,25 +104,27 @@ class MultiWayRetriever:
         return scores
 
     def retrieve_by_entity(self, query: str, memories: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Score memories by entity/keyword overlap with query."""
+        """Score memories by robust Chinese & Latin keyword/entity overlap."""
         if not query or not memories:
             return {}
 
-        entities = self.extract_entities(query)
-        query_words = set(query.lower().split())
+        query_tokens = extract_robust_tokens(query)
+        if not query_tokens:
+            return {}
+
         scores = {}
-
         for mem in memories:
-            mem_entities = set(e.lower() for e in (mem.get("entities") or []))
-            mem_words = set(mem["content"].lower().split())
+            # Check explicit entities list + memory text tokens
+            explicit_entities = set(str(e).lower() for e in (mem.get("entities") or []))
+            content_tokens = extract_robust_tokens(mem["content"])
 
-            entity_overlap = len(entities & mem_entities)
-            word_overlap = len(query_words & mem_words)
+            all_mem_tokens = explicit_entities | content_tokens
+            overlap = query_tokens & all_mem_tokens
 
-            # Normalize
-            max_possible = max(1, len(entities) + len(query_words))
-            score = min(1.0, (entity_overlap * 2 + word_overlap) / max_possible)
-            scores[mem["id"]] = score
+            # Score by overlap proportion
+            score = len(overlap) / max(1, len(query_tokens))
+            scores[mem["id"]] = min(1.0, score)
+
         return scores
 
     def retrieve_by_emotion(
@@ -104,16 +139,15 @@ class MultiWayRetriever:
         if not memories:
             return {}
 
-        # Use provided emotional coords or fall back to neutral
         q_val = float(detected_valence) if detected_valence is not None else 0.0
         q_aro = float(detected_arousal) if detected_arousal is not None else 0.0
 
         scores = {}
         for mem in memories:
-            m_val = float(mem.get("valence") or 0.0)
-            m_aro = float(mem.get("arousal") or 0.0)
+            m_val = float(mem.get("valence") if mem.get("valence") is not None else 0.0)
+            m_aro = float(mem.get("arousal") if mem.get("arousal") is not None else 0.0)
 
-            # Euclidean distance in 2D emotion space; max distance = sqrt(2*4) = ~2.83
+            # Euclidean distance in 2D emotion space
             dist = math.sqrt((q_val - m_val) ** 2 + (q_aro - m_aro) ** 2)
             score = max(0.0, 1.0 - dist / 2.83)
 
@@ -125,7 +159,7 @@ class MultiWayRetriever:
         return scores
 
     def retrieve_by_recency(self, memories: List[Dict[str, Any]]) -> Dict[str, float]:
-        """Score memories by how recently they were accessed or created."""
+        """Score memories by recent interaction / access freshness (does NOT duplicate decay)."""
         if not memories:
             return {}
 
@@ -135,19 +169,15 @@ class MultiWayRetriever:
             ts_str = mem.get("last_accessed_at") or mem.get("created_at") or ""
             try:
                 ts = datetime.strptime(ts_str[:19], "%Y-%m-%d %H:%M:%S")
-                days_ago = (now - ts).total_seconds() / 86400
-                # Exponential decay with 30-day half-life
-                score = math.exp(-days_ago / 30.0)
+                days_ago = (now - ts).total_seconds() / 86400.0
+                # Recent access boost within 14 days
+                score = math.exp(-days_ago / 14.0)
             except Exception:
                 score = 0.0
             scores[mem["id"]] = score
         return scores
 
-    def extract_entities(self, text: str) -> set:
-        """Extract potential entity mentions from text using simple heuristics."""
-        words = set()
-        for word in text.split():
-            clean = word.strip("，。！？,.!?\"'""''()（）[]【】").strip()
-            if len(clean) >= 2:
-                words.add(clean.lower())
-        return words
+    def extract_entities(self, text: str) -> List[str]:
+        """Extract entity list from text, returning a JSON-serializable list."""
+        tokens = extract_robust_tokens(text)
+        return list(tokens)

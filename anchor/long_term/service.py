@@ -1,7 +1,8 @@
 """Long-term Memory Service for Anchor.
 
 Manages episodic & semantic memories, emotional coordinate tagging,
-version superseding, and periodic Ebbinghaus decay updates.
+provenance tracking, hard protection (is_protected), version superseding,
+and single-transaction periodic Ebbinghaus decay updates.
 """
 import json
 import uuid
@@ -34,24 +35,39 @@ class LongTermMemoryService:
         self,
         content: str,
         category: str = "general",
-        importance: float = 0.5,
+        importance: Optional[float] = None,
         valence: float = 0.0,
         arousal: float = 0.0,
         emotion_label: str = "neutral",
         entities: Optional[List[str]] = None,
         links: Optional[List[str]] = None,
         custom_id: Optional[str] = None,
+        is_protected: int = 0,
+        source_message_id: Optional[str] = None,
+        source_date: Optional[str] = None,
+        confidence: float = 1.0,
         created_at: Optional[str] = None,
         backfilled: int = 0
     ) -> MemoryItem:
-        """Create a new long-term memory entry with full emotional coordinates."""
+        """Create a new long-term memory entry with provenance and protection."""
         memory_id = custom_id or f"mem_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:6]}"
         now = created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entities_json = json.dumps(entities or [], ensure_ascii=False)
-        links_json = json.dumps(links or [], ensure_ascii=False)
+
+        # Safe importance parsing: allows 0.0, clamps to [0.0, 1.0]
+        safe_importance = 0.5 if importance is None else max(0.0, min(1.0, float(importance)))
+        safe_valence = max(-1.0, min(1.0, float(valence if valence is not None else 0.0)))
+        safe_arousal = max(0.0, min(1.0, float(arousal if arousal is not None else 0.0)))
+
+        # Guarantee entities and links are serializable lists
+        safe_entities = list(entities) if entities is not None else []
+        safe_links = list(links) if links is not None else []
+        entities_json = json.dumps(safe_entities, ensure_ascii=False)
+        links_json = json.dumps(safe_links, ensure_ascii=False)
 
         # Initial decay score equals initial importance
-        decay_score = calculate_decay_score(importance, arousal, days_elapsed=0.0)
+        decay_score = calculate_decay_score(
+            safe_importance, safe_arousal, days_elapsed=0.0, is_protected=bool(is_protected)
+        )
 
         with self._db() as conn:
             cursor = conn.cursor()
@@ -59,28 +75,32 @@ class LongTermMemoryService:
                 """
                 INSERT OR IGNORE INTO anchor_memories
                 (id, content, category, importance, valence, arousal, emotion_label,
-                 entities, links, decay_score, status, backfilled,
-                 created_at, updated_at, last_accessed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
+                 entities, links, decay_score, status, is_protected, source_message_id,
+                 source_date, confidence, backfilled, created_at, updated_at, last_accessed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (memory_id, content.strip(), category, importance, valence, arousal,
-                 emotion_label, entities_json, links_json, decay_score, backfilled,
-                 now, now, now)
+                (memory_id, content.strip(), category, safe_importance, safe_valence, safe_arousal,
+                 emotion_label, entities_json, links_json, decay_score, is_protected,
+                 source_message_id, source_date, confidence, backfilled, now, now, now)
             )
 
-        logger.info(f"Created long-term memory {memory_id}: {content[:40]}...")
+        logger.info(f"Created long-term memory {memory_id}: {content[:40]}... (protected={is_protected})")
         return MemoryItem(
             id=memory_id,
             content=content.strip(),
             category=category,
-            importance=importance,
-            valence=valence,
-            arousal=arousal,
+            importance=safe_importance,
+            valence=safe_valence,
+            arousal=safe_arousal,
             emotion_label=emotion_label,
-            entities=entities or [],
-            links=links or [],
+            entities=safe_entities,
+            links=safe_links,
             decay_score=decay_score,
             status="active",
+            is_protected=is_protected,
+            source_message_id=source_message_id,
+            source_date=source_date,
+            confidence=confidence,
             backfilled=backfilled,
             created_at=now,
             updated_at=now,
@@ -88,7 +108,7 @@ class LongTermMemoryService:
         )
 
     def get_memory(self, memory_id: str) -> Optional[MemoryItem]:
-        """Retrieve a memory by ID, also accepting alias IDs."""
+        """Retrieve a memory by ID."""
         clean_id = str(memory_id).strip()
         with self._db() as conn:
             cursor = conn.cursor()
@@ -107,8 +127,15 @@ class LongTermMemoryService:
                     d[field] = []
             return MemoryItem(**d)
 
-    def update_memory(self, memory_id: str, mode: str = "replace", content: str = "") -> bool:
-        """Update memory content (mode: 'replace' or 'append')."""
+    def update_memory(
+        self,
+        memory_id: str,
+        mode: str = "replace",
+        content: str = "",
+        importance: Optional[float] = None,
+        is_protected: Optional[int] = None
+    ) -> bool:
+        """Update memory content or protection status."""
         mem = self.get_memory(memory_id)
         if not mem:
             logger.warning(f"Memory {memory_id} not found for update")
@@ -117,12 +144,23 @@ class LongTermMemoryService:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         new_content = content.strip() if mode == "replace" else f"{mem.content}\n{content.strip()}"
 
+        updates = ["content = ?", "updated_at = ?"]
+        params = [new_content, now]
+
+        if importance is not None:
+            updates.append("importance = ?")
+            params.append(max(0.0, min(1.0, float(importance))))
+
+        if is_protected is not None:
+            updates.append("is_protected = ?")
+            params.append(int(is_protected))
+
+        params.append(mem.id)
+        sql = f"UPDATE anchor_memories SET {', '.join(updates)} WHERE id = ?"
+
         with self._db() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE anchor_memories SET content = ?, updated_at = ? WHERE id = ?",
-                (new_content, now, mem.id)
-            )
+            cursor.execute(sql, params)
             updated = cursor.rowcount > 0
 
         if updated:
@@ -130,13 +168,20 @@ class LongTermMemoryService:
         return updated
 
     def supersede_memory(self, old_memory_id: str, new_content: str, reason: str) -> Optional[MemoryItem]:
-        """Create a new memory that supersedes an old one; old is marked as 'superseded'."""
+        """Create a new memory that supersedes an old one; old is marked as 'superseded'.
+
+        Guards against overwriting protected memories without user permission.
+        """
         old_mem = self.get_memory(old_memory_id)
         if not old_mem:
             logger.warning(f"Memory {old_memory_id} not found for supersede")
             return None
 
-        # Create new memory inheriting emotional coordinates
+        if old_mem.is_protected:
+            logger.warning(f"Memory {old_memory_id} is marked as is_protected=1. Automatic supersede is rejected.")
+            return None
+
+        # Create new memory inheriting coordinates and linking to previous version
         new_mem = self.create_memory(
             content=new_content,
             category=old_mem.category,
@@ -146,9 +191,10 @@ class LongTermMemoryService:
             emotion_label=old_mem.emotion_label,
             entities=old_mem.entities,
             links=[old_mem.id] + old_mem.links,
+            source_date=datetime.now().strftime("%Y-%m-%d"),
+            confidence=1.0
         )
 
-        # Mark old as superseded
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._db() as conn:
             cursor = conn.cursor()
@@ -235,25 +281,31 @@ class LongTermMemoryService:
             return result
 
     def recalculate_all_decay_scores(self) -> int:
-        """Recompute Ebbinghaus decay scores for all active memories. Called at midnight."""
+        """Recompute Ebbinghaus decay scores for all active memories in a single atomic transaction."""
         now = datetime.now()
         active = self.get_all_active()
-        updated_count = 0
+        if not active:
+            return 0
 
+        updates = []
         for mem in active:
             try:
                 created = datetime.strptime(mem.created_at[:19], "%Y-%m-%d %H:%M:%S")
-                days_elapsed = (now - created).total_seconds() / 86400
+                days_elapsed = (now - created).total_seconds() / 86400.0
             except Exception:
                 days_elapsed = 0.0
 
-            new_score = calculate_decay_score(mem.importance, mem.arousal, days_elapsed)
-            with self._db() as conn:
-                conn.execute(
-                    "UPDATE anchor_memories SET decay_score = ? WHERE id = ?",
-                    (new_score, mem.id)
-                )
-            updated_count += 1
+            new_score = calculate_decay_score(
+                mem.importance, mem.arousal, days_elapsed, is_protected=bool(mem.is_protected)
+            )
+            updates.append((new_score, mem.id))
 
-        logger.info(f"Recalculated decay scores for {updated_count} active memories.")
-        return updated_count
+        with self._db() as conn:
+            cursor = conn.cursor()
+            cursor.executemany(
+                "UPDATE anchor_memories SET decay_score = ? WHERE id = ?",
+                updates
+            )
+
+        logger.info(f"Recalculated decay scores for {len(updates)} active memories in 1 transaction.")
+        return len(updates)

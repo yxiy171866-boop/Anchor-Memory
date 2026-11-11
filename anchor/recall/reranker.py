@@ -1,7 +1,10 @@
 """Multi-Way Score Reranker for Anchor Memory Recall.
 
 Combines semantic, entity, emotion, and recency signals with
-configurable weights into a final recall score.
+configurable weights into a composite score.
+
+Threshold filter applies only to the Composite Score to reject irrelevant noise,
+while DecayScore acts purely on final ranking to respect age and importance.
 """
 import logging
 from typing import List, Dict, Any, Optional
@@ -56,7 +59,9 @@ class AnchorReranker:
     ) -> List[Dict[str, Any]]:
         """Combine four retrieval signals into a final ranked list.
 
-        Final score = w_sem * sem + w_ent * ent + w_emo * emo + w_rec * rec
+        Composite = w_sem * sem + w_ent * ent + w_emo * emo + w_rec * rec
+        Filter: Composite >= min_score (filters semantic/entity noise)
+        FinalScore = Composite * DecayScore (orders by retention and recency)
         """
         limit = override_top_k if override_top_k is not None else self.top_k
 
@@ -75,15 +80,16 @@ class AnchorReranker:
                 + self.w_recency * rec
             )
 
-            # Apply decay score as a retention weight multiplier
-            decay = float(mem.get("decay_score", 1.0))
-            final_score = composite * max(0.1, decay)
-
-            if final_score < self.min_score:
+            # Threshold check operates on composite relevance to prevent filtering valid older memories
+            if composite < self.min_score:
                 continue
+
+            decay = float(mem.get("decay_score", 1.0))
+            final_score = composite * max(0.2, decay)
 
             item_copy = dict(mem)
             item_copy["recall_score"] = round(final_score, 4)
+            item_copy["composite_score"] = round(composite, 4)
             item_copy["_scores"] = {
                 "semantic": round(sem, 3),
                 "entity": round(ent, 3),

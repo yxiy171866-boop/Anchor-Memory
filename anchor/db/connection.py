@@ -1,7 +1,7 @@
 """Anchor Memory SQLite Database Connection Manager.
 
 Handles schema initialization, context-managed connections,
-and persistent settings store.
+WAL mode, foreign key enforcement, and persistent settings store.
 """
 import json
 import logging
@@ -32,6 +32,10 @@ CREATE TABLE IF NOT EXISTS anchor_memories (
     decay_score REAL DEFAULT 1.0,           -- Ebbinghaus-computed retention weight
     status TEXT DEFAULT 'active',           -- active | superseded | archived
     superseded_by TEXT NULL,
+    is_protected INTEGER DEFAULT 0,         -- 1 = hard protection (cannot be auto-superseded/decayed)
+    source_message_id TEXT NULL,            -- traceability: which message produced this
+    source_date TEXT NULL,                  -- traceability: original dialogue date
+    confidence REAL DEFAULT 1.0,            -- extraction confidence
     backfilled INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -40,6 +44,7 @@ CREATE TABLE IF NOT EXISTS anchor_memories (
 CREATE INDEX IF NOT EXISTS idx_am_status ON anchor_memories(status);
 CREATE INDEX IF NOT EXISTS idx_am_category ON anchor_memories(category);
 CREATE INDEX IF NOT EXISTS idx_am_importance ON anchor_memories(importance);
+CREATE INDEX IF NOT EXISTS idx_am_protected ON anchor_memories(is_protected);
 
 -- 2. Memory Notes (non-destructive companion/user annotations)
 CREATE TABLE IF NOT EXISTS anchor_memory_notes (
@@ -57,11 +62,12 @@ CREATE TABLE IF NOT EXISTS anchor_working_memory (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     category TEXT DEFAULT 'general',        -- todo | state | promise | general
-    status TEXT DEFAULT 'active',           -- active | expired
+    status TEXT DEFAULT 'active',           -- active | expired | archived (no hard delete)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_by TEXT DEFAULT 'companion',
     expired_at TIMESTAMP NULL,
     expire_reason TEXT NULL,
+    archived_at TIMESTAMP NULL,
     auto_clear_after_days INTEGER DEFAULT 2
 );
 CREATE INDEX IF NOT EXISTS idx_awm_status ON anchor_working_memory(status);
@@ -92,10 +98,12 @@ CREATE TABLE IF NOT EXISTS anchor_consolidation_log (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 6. Embedding Vector Cache
+-- 6. Embedding Vector Cache (with model and dimension safety)
 CREATE TABLE IF NOT EXISTS anchor_embeddings (
     memory_id TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL,
+    embedding_model TEXT DEFAULT 'local',
+    dimension INTEGER DEFAULT 64,
     vector_json TEXT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -109,23 +117,33 @@ CREATE TABLE IF NOT EXISTS anchor_settings (
 """
 
 
+def _configure_connection(conn: sqlite3.Connection) -> None:
+    """Enforce WAL mode, foreign keys, and synchronous safety."""
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=10000;")
+
+
 def init_db(db_path: str = ANCHOR_DB_PATH) -> None:
     """Initialize anchor database directory and schema (safe to call repeatedly)."""
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(db_path, timeout=10.0) as conn:
+        _configure_connection(conn)
         conn.executescript(SCHEMA_SQL)
         conn.commit()
-    logger.info(f"Anchor database initialized at {db_path}")
+    logger.info(f"Anchor database initialized with WAL and FK enabled at {db_path}")
 
 
 @contextmanager
 def get_db(db_path: str = ANCHOR_DB_PATH) -> Generator[sqlite3.Connection, None, None]:
-    """Context manager for SQLite connections with dict-like row access."""
+    """Context manager for SQLite connections with dict-like row access, WAL & FK."""
     path = Path(db_path)
     if not path.exists():
         init_db(db_path)
     conn = sqlite3.connect(db_path, timeout=10.0)
+    _configure_connection(conn)
     conn.row_factory = sqlite3.Row
     try:
         yield conn

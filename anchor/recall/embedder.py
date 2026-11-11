@@ -1,7 +1,7 @@
 """Anchor Embedding and Vector Similarity Service.
 
-Provides resilient embedding generation with automatic local fallback
-and cosine similarity computation.
+Provides resilient embedding generation with automatic local fallback,
+dimension and model metadata tracking, and cosine similarity computation.
 """
 import math
 import json
@@ -17,6 +17,7 @@ except ImportError:
 logger = logging.getLogger("anchor.embedder")
 
 FALLBACK_DIMENSION = 64
+FALLBACK_MODEL = "local_ngram_v1"
 
 
 def _local_fallback_vector(text: str, dim: int = FALLBACK_DIMENSION) -> List[float]:
@@ -30,7 +31,6 @@ def _local_fallback_vector(text: str, dim: int = FALLBACK_DIMENSION) -> List[flo
         return [0.0] * dim
 
     vec = [0.0] * dim
-    # Character bi-grams & tri-grams
     ngrams = []
     for n in (2, 3):
         for i in range(max(0, len(clean_text) - n + 1)):
@@ -45,7 +45,6 @@ def _local_fallback_vector(text: str, dim: int = FALLBACK_DIMENSION) -> List[flo
         sign = 1.0 if ((h >> 8) & 1) == 1 else -1.0
         vec[idx] += sign
 
-    # L2 normalize
     norm = math.sqrt(sum(x * x for x in vec))
     if norm > 0:
         vec = [x / norm for x in vec]
@@ -61,18 +60,11 @@ class AnchorEmbedder:
             return get_db(self.db_path)
         return get_db()
 
-    def get_embedding(self, text: str) -> List[float]:
-        """Obtain embedding vector for given text.
-
-        Tries external embedding service first (if configured); if unavailable,
-        falls back to deterministic local character n-gram vector.
-
-        To plug in your own embedding API, set the ANCHOR_EMBEDDING_API_URL
-        environment variable or override this method in a subclass.
-        """
+    def get_embedding(self, text: str) -> tuple[List[float], str, int]:
+        """Obtain embedding vector, model identifier, and dimension for given text."""
         clean_text = (text or "").strip()
         if not clean_text:
-            return [0.0] * FALLBACK_DIMENSION
+            return [0.0] * FALLBACK_DIMENSION, FALLBACK_MODEL, FALLBACK_DIMENSION
 
         # Attempt to use configured external embedding service
         try:
@@ -80,51 +72,61 @@ class AnchorEmbedder:
             import urllib.request
             api_url = os.getenv("ANCHOR_EMBEDDING_API_URL", "")
             if api_url:
-                import json as _json
-                payload = _json.dumps({"text": clean_text}).encode("utf-8")
-                req = urllib.request.Request(api_url, data=payload,
-                                             headers={"Content-Type": "application/json"})
+                payload = json.dumps({"text": clean_text}).encode("utf-8")
+                req = urllib.request.Request(
+                    api_url, data=payload, headers={"Content-Type": "application/json"}
+                )
                 with urllib.request.urlopen(req, timeout=3) as resp:
-                    result = _json.loads(resp.read())
+                    result = json.loads(resp.read())
                     vector = result.get("embedding") or result.get("vector")
+                    model = result.get("model", "external_api")
                     if vector and isinstance(vector, list) and len(vector) > 0:
-                        return [float(x) for x in vector]
+                        dim = len(vector)
+                        return [float(x) for x in vector], model, dim
         except Exception as e:
             logger.debug(f"External embedding service unavailable, using local fallback: {e}")
 
         # Local deterministic fallback
-        return _local_fallback_vector(clean_text)
+        return _local_fallback_vector(clean_text), FALLBACK_MODEL, FALLBACK_DIMENSION
+
+    def get_embedding_vector(self, text: str) -> List[float]:
+        """Convenience method returning vector only."""
+        vec, _, _ = self.get_embedding(text)
+        return vec
 
     def cache_memory_embedding(self, memory_id: str, content: str) -> List[float]:
-        """Compute and persist embedding for a memory item."""
+        """Compute and persist embedding for a memory item with dimension verification."""
         content_hash = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
-        vector = self.get_embedding(content)
+        vector, model, dim = self.get_embedding(content)
         vector_json = json.dumps(vector)
 
         with self._db() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO anchor_embeddings (memory_id, content_hash, vector_json)
-                VALUES (?, ?, ?)
+                INSERT OR REPLACE INTO anchor_embeddings
+                (memory_id, content_hash, embedding_model, dimension, vector_json)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (memory_id, content_hash, vector_json)
+                (memory_id, content_hash, model, dim, vector_json)
             )
         return vector
 
     def get_cached_embedding(self, memory_id: str, content: str) -> List[float]:
-        """Retrieve cached embedding or compute if missing."""
+        """Retrieve cached embedding if valid and matching active model dimension, or recompute."""
         content_hash = hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
         with self._db() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT vector_json, content_hash FROM anchor_embeddings WHERE memory_id = ?",
+                "SELECT vector_json, content_hash, dimension FROM anchor_embeddings WHERE memory_id = ?",
                 (memory_id,)
             )
             row = cursor.fetchone()
             if row and row["content_hash"] == content_hash:
                 try:
-                    return json.loads(row["vector_json"])
+                    loaded = json.loads(row["vector_json"])
+                    if len(loaded) == (row["dimension"] or len(loaded)):
+                        return loaded
                 except Exception:
                     pass
 

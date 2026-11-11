@@ -1,13 +1,14 @@
 """Working Memory Service for Anchor.
 
 Manages short-term ongoing background states (prefrontal cortex),
-state transitions (active -> expired -> 2-day buffer auto-purge),
-and bidirectional rescue.
+state transitions (active -> expired -> 2-day buffer -> archived),
+no physical hard deletes, strict ID validation with helpful candidates,
+and auto-expiry checking based on elapsed time.
 """
 import uuid
 import logging
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any
 
 try:
     from anchor.db.connection import get_db
@@ -34,7 +35,8 @@ class WorkingMemoryService:
         self,
         content: str,
         category: str = "general",
-        created_by: str = "companion"
+        created_by: str = "companion",
+        auto_clear_after_days: int = WORKING_MEMORY_BUFFER_DAYS
     ) -> WorkingMemoryItem:
         """Add a new item to working memory with status='active'."""
         item_id = f"wm_{uuid.uuid4().hex[:10]}"
@@ -48,7 +50,7 @@ class WorkingMemoryService:
                 (id, content, category, status, created_at, created_by, auto_clear_after_days)
                 VALUES (?, ?, ?, 'active', ?, ?, ?)
                 """,
-                (item_id, content.strip(), category, now, created_by, WORKING_MEMORY_BUFFER_DAYS)
+                (item_id, content.strip(), category, now, created_by, auto_clear_after_days)
             )
 
         logger.info(f"Added working memory item {item_id}: {content[:30]}...")
@@ -59,7 +61,7 @@ class WorkingMemoryService:
             status="active",
             created_at=now,
             created_by=created_by,
-            auto_clear_after_days=WORKING_MEMORY_BUFFER_DAYS
+            auto_clear_after_days=auto_clear_after_days
         )
 
     def update_item(self, item_id: str, content: str) -> bool:
@@ -72,7 +74,7 @@ class WorkingMemoryService:
                 SET content = ?
                 WHERE id = ?
                 """,
-                (content.strip(), item_id)
+                (content.strip(), item_id.strip())
             )
             updated = cursor.rowcount > 0
 
@@ -80,17 +82,17 @@ class WorkingMemoryService:
             logger.info(f"Updated working memory item {item_id}: {content[:30]}...")
         return updated
 
-    def expire_item(self, item_id: str, reason: Optional[str] = None) -> bool:
-        """Mark an item as expired (starts 2-day buffer period, strictly no hard delete).
+    def expire_item(self, item_id: str, reason: Optional[str] = None) -> Dict[str, Any]:
+        """Mark an item as expired (starts 2-day buffer period).
 
-        Supports exact ID match as well as keyword fallback match for usability.
+        STRICT: Only exact ID matching is allowed to prevent accidental deletion.
+        If not found, returns success=False and a candidate list of active items.
         """
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         target_id = item_id.strip()
 
         with self._db() as conn:
             cursor = conn.cursor()
-            # 1. Exact ID match
             cursor.execute(
                 """
                 UPDATE anchor_working_memory
@@ -99,59 +101,26 @@ class WorkingMemoryService:
                     expire_reason = ?
                 WHERE id = ? AND status = 'active'
                 """,
-                (now, reason, target_id)
+                (now, reason or "resolved", target_id)
             )
             expired = cursor.rowcount > 0
 
-            # 2. Fuzzy/keyword fallback (tolerates partial IDs like 'wm_task' or 'task')
-            if not expired:
-                cursor.execute(
-                    """
-                    SELECT id FROM anchor_working_memory
-                    WHERE status = 'active'
-                    ORDER BY created_at DESC
-                    """
-                )
-                active_rows = cursor.fetchall()
-                clean_target = target_id.lower().replace("wm_", "").strip()
-                matched_id = None
-
-                for r in active_rows:
-                    aid = r["id"]
-                    if clean_target and clean_target in aid.lower():
-                        matched_id = aid
-                        break
-
-                if not matched_id and clean_target:
-                    cursor.execute(
-                        """
-                        SELECT id FROM anchor_working_memory
-                        WHERE status = 'active' AND content LIKE ?
-                        LIMIT 1
-                        """,
-                        (f"%{clean_target}%",)
-                    )
-                    row = cursor.fetchone()
-                    if row:
-                        matched_id = row["id"]
-
-                if matched_id:
-                    cursor.execute(
-                        """
-                        UPDATE anchor_working_memory
-                        SET status = 'expired', expired_at = ?, expire_reason = ?
-                        WHERE id = ? AND status = 'active'
-                        """,
-                        (now, reason, matched_id)
-                    )
-                    expired = cursor.rowcount > 0
-
         if expired:
-            logger.info(f"Expired working memory item {item_id} (reason: {reason})")
-        return expired
+            logger.info(f"Expired working memory item {target_id} (reason: {reason})")
+            return {"success": True, "item_id": target_id, "message": f"Item [{target_id}] marked as expired."}
+
+        # Provide candidate list to guide model or user
+        active_items = self.get_active_items()
+        candidates = [{"id": it.id, "content": it.content[:40]} for it in active_items]
+        return {
+            "success": False,
+            "error": f"Item with ID '{target_id}' not found in active items.",
+            "candidates": candidates
+        }
 
     def restore_item(self, item_id: str, restore_reason: str = "false positive recovery") -> Optional[WorkingMemoryItem]:
-        """Rescue: restore an expired-buffer item back to active state."""
+        """Rescue an expired-buffer item back to 'active' status."""
+        target_id = item_id.strip()
         with self._db() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -160,13 +129,13 @@ class WorkingMemoryService:
                 SET status = 'active', expired_at = NULL, expire_reason = ?
                 WHERE id = ? AND status = 'expired'
                 """,
-                (f"[RESTORED] {restore_reason}", item_id)
+                (f"[RESTORED] {restore_reason}", target_id)
             )
             restored = cursor.rowcount > 0
 
             if restored:
                 cursor.execute(
-                    "SELECT * FROM anchor_working_memory WHERE id = ?", (item_id,)
+                    "SELECT * FROM anchor_working_memory WHERE id = ?", (target_id,)
                 )
                 row = cursor.fetchone()
                 if row:
@@ -174,12 +143,17 @@ class WorkingMemoryService:
         return None
 
     def get_active_items(self) -> List[WorkingMemoryItem]:
-        """Get all currently active working memory items."""
+        """Fetch all currently active working memory items (auto-refreshing elapsed timeouts)."""
+        # First trigger check for items that exceeded auto_clear_after_days
+        self.check_and_expire_overdue_items()
+
         with self._db() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT * FROM anchor_working_memory
+                SELECT id, content, category, status, created_at, created_by,
+                       expired_at, expire_reason, auto_clear_after_days
+                FROM anchor_working_memory
                 WHERE status = 'active'
                 ORDER BY created_at DESC
                 """
@@ -187,21 +161,63 @@ class WorkingMemoryService:
             rows = cursor.fetchall()
             return [WorkingMemoryItem(**dict(r)) for r in rows]
 
-    def purge_expired_buffer(self) -> int:
-        """Hard-delete expired items that have exceeded the buffer period. Called by midnight pipeline."""
-        from datetime import timedelta
-        cutoff = (datetime.now() - timedelta(days=WORKING_MEMORY_BUFFER_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    def check_and_expire_overdue_items(self) -> int:
+        """Automatically transition active items to 'expired' if they exceeded auto_clear_after_days."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with self._db() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                DELETE FROM anchor_working_memory
-                WHERE status = 'expired' AND expired_at < ?
+                UPDATE anchor_working_memory
+                SET status = 'expired',
+                    expired_at = ?,
+                    expire_reason = 'auto-expired after duration timeout'
+                WHERE status = 'active'
+                  AND julianday('now') - julianday(created_at) >= auto_clear_after_days
                 """,
-                (cutoff,)
+                (now,)
             )
             count = cursor.rowcount
-        logger.info(f"Purged {count} expired working memory items past buffer period.")
+
+        if count > 0:
+            logger.info(f"Auto-expired {count} overdue active working memory items.")
+        return count
+
+    def get_expired_buffer(self) -> List[WorkingMemoryItem]:
+        """Fetch items currently in the 2-day recovery buffer."""
+        with self._db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, content, category, status, created_at, created_by,
+                       expired_at, expire_reason, auto_clear_after_days
+                FROM anchor_working_memory
+                WHERE status = 'expired'
+                ORDER BY expired_at DESC
+                """
+            )
+            rows = cursor.fetchall()
+            return [WorkingMemoryItem(**dict(r)) for r in rows]
+
+    def purge_expired_buffer(self, buffer_days: int = WORKING_MEMORY_BUFFER_DAYS) -> int:
+        """NO HARD DELETE: Transition expired buffer items older than buffer_days to 'archived' status."""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with self._db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE anchor_working_memory
+                SET status = 'archived',
+                    archived_at = ?
+                WHERE status = 'expired'
+                  AND (julianday('now') - julianday(expired_at) >= ? OR ? <= 0)
+                """,
+                (now, buffer_days, buffer_days)
+            )
+            count = cursor.rowcount
+
+        if count > 0:
+            logger.info(f"Safely archived {count} expired items past buffer (no physical hard delete).")
         return count
 
     def format_for_context(self) -> str:

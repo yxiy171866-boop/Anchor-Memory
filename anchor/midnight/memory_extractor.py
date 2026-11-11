@@ -1,7 +1,7 @@
-"""Anchor Midnight Step 2 - Long-Term Memory Extraction & Emotional Coordinate Tagging.
+"""Anchor Midnight Step 2 - Long-Term Memory Extraction with Provenance.
 
 Extracts facts, episodic events, and preferences from daily dialogue,
-attaching valence, arousal, emotion labels, and entities.
+attaching valence, arousal, emotion labels, provenance tracking, and entity lists.
 """
 import logging
 from typing import List, Dict, Any, Optional
@@ -31,10 +31,9 @@ class MemoryExtractor:
         candidate_items: List[Dict[str, Any]],
         date_str: str
     ) -> List[MemoryItem]:
-        """Extract and persist long-term memories with heuristic emotional tagging.
-        
-        candidate_items: list of dicts with keys: content, category, importance,
-                         optionally valence, arousal, emotion_label, entities
+        """Extract and persist long-term memories with heuristic emotional tagging and source tracking.
+
+        Guarantees that entities is converted from set to list before insertion.
         """
         created_memories = []
 
@@ -44,7 +43,8 @@ class MemoryExtractor:
                 continue
 
             category = item.get("category", "episodic")
-            importance = float(item.get("importance", 0.6))
+            raw_importance = item.get("importance")
+            importance = 0.6 if raw_importance is None else max(0.0, min(1.0, float(raw_importance)))
 
             # Deduce or inherit valence/arousal/emotion
             val = item.get("valence")
@@ -57,9 +57,16 @@ class MemoryExtractor:
                 aro = aro if aro is not None else h_aro
                 emo = emo or h_emo
 
+            # Convert entities to list (resolves TypeError when set is returned)
             entities = item.get("entities")
             if not entities:
                 entities = self.backfill_service.extract_entities(content)
+            if isinstance(entities, set):
+                entities = list(entities)
+
+            is_protected = int(item.get("is_protected", 0))
+            source_msg_id = str(item.get("source_message_id", "")) if item.get("source_message_id") else None
+            confidence = float(item.get("confidence", 1.0))
 
             mem = self.lt_service.create_memory(
                 content=content,
@@ -69,8 +76,12 @@ class MemoryExtractor:
                 arousal=float(aro),
                 emotion_label=emo,
                 entities=entities,
+                is_protected=is_protected,
+                source_message_id=source_msg_id,
+                source_date=date_str,
+                confidence=confidence
             )
             created_memories.append(mem)
-            logger.info(f"Extracted memory [{mem.id}]: {content[:40]}...")
+            logger.info(f"Extracted memory [{mem.id}]: {content[:40]}... (provenance={source_msg_id})")
 
         return created_memories
