@@ -1,7 +1,7 @@
 """Long-term Memory Pydantic Models with Provenance and Protection."""
 from datetime import datetime
-from typing import Optional, List, Literal
-from pydantic import BaseModel, Field
+from typing import Optional, List, Literal, Any
+from pydantic import BaseModel, Field, field_validator
 
 
 class MemoryItem(BaseModel):
@@ -26,6 +26,19 @@ class MemoryItem(BaseModel):
     updated_at: str
     last_accessed_at: str
 
+    @field_validator("importance", mode="before")
+    @classmethod
+    def normalize_importance(cls, v: Any) -> float:
+        if v is None:
+            return 0.5
+        try:
+            val = float(v)
+            if val > 1.0:
+                val = val / 5.0
+            return max(0.0, min(1.0, val))
+        except (ValueError, TypeError):
+            return 0.5
+
 
 class MemoryCreate(BaseModel):
     content: str
@@ -40,6 +53,19 @@ class MemoryCreate(BaseModel):
     source_message_id: Optional[str] = None
     source_date: Optional[str] = None
     confidence: float = 1.0
+
+    @field_validator("importance", mode="before")
+    @classmethod
+    def normalize_importance(cls, v: Any) -> float:
+        if v is None:
+            return 0.5
+        try:
+            val = float(v)
+            if val > 1.0:
+                val = val / 5.0
+            return max(0.0, min(1.0, val))
+        except (ValueError, TypeError):
+            return 0.5
 
 
 class MemoryUpdate(BaseModel):

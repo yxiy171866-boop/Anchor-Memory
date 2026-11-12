@@ -163,6 +163,17 @@ class WorkingMemoryService:
                     return WorkingMemoryItem(**dict(row))
         return None
 
+    def delete_item(self, item_id: str) -> bool:
+        """Permanently delete a working memory item (for manual user cleanup)."""
+        target_id = item_id.strip()
+        with self._db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM anchor_working_memory WHERE id = ?", (target_id,))
+            deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"Deleted working memory item {target_id}")
+        return deleted
+
     def get_active_items(self) -> List[WorkingMemoryItem]:
         """Fetch all currently active working memory items (auto-refreshing elapsed timeouts)."""
         # First trigger check for items that exceeded auto_clear_after_days

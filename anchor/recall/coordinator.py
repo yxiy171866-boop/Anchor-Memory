@@ -57,7 +57,8 @@ class AnchorRecallCoordinator:
             entity_scores=s_ent,
             emotion_scores=s_emo,
             recency_scores=s_rec,
-            override_top_k=top_k
+            override_top_k=top_k,
+            query=query,
         )
 
         # Reinforce recalled memories by updating last_accessed_at

@@ -56,14 +56,18 @@ class AnchorReranker:
         emotion_scores: Dict[str, float],
         recency_scores: Dict[str, float],
         override_top_k: Optional[int] = None,
+        query: str = "",
     ) -> List[Dict[str, Any]]:
-        """Combine four retrieval signals into a final ranked list.
-
-        Composite = w_sem * sem + w_ent * ent + w_emo * emo + w_rec * rec
-        Filter: Composite >= min_score (filters semantic/entity noise)
-        FinalScore = Composite * DecayScore (orders by retention and recency)
-        """
+        """Combine four retrieval signals into a final ranked list."""
         limit = override_top_k if override_top_k is not None else self.top_k
+
+        # Detect historical cues in query
+        q_lower = query.lower() if query else ""
+        historical_cues = ["之前", "以前", "上一次", "那次", "过去", "记得那次", "小时候", "刚认识", "刚开始", "月", "去年", "暑假", "曾经"]
+        is_historical = any(cue in q_lower for cue in historical_cues)
+
+        w_sem = self.w_semantic + (self.w_recency if is_historical else 0.0)
+        w_rec = 0.0 if is_historical else self.w_recency
 
         ranked_items = []
         for mem in active_memories:
@@ -74,30 +78,33 @@ class AnchorReranker:
             rec = float(recency_scores.get(mem_id, 0.0))
 
             composite = (
-                self.w_semantic * sem
+                w_sem * sem
                 + self.w_entity * ent
                 + self.w_emotion * emo
-                + self.w_recency * rec
+                + w_rec * rec
             )
 
-            # Threshold check operates on composite relevance to prevent filtering valid older memories
-            if composite < self.min_score:
-                continue
-
+            # High semantic similarity indicates direct historical retrieval interest;
+            # neutralize decay penalty so older but highly relevant memories are retained.
             decay = float(mem.get("decay_score", 1.0))
-            final_score = composite * max(0.2, decay)
+            decay_eff = (0.95 + 0.05 * decay) if (is_historical or sem >= 0.35) else max(0.2, decay)
+            final_score = composite * decay_eff
+            if sem >= 0.35:
+                final_score += (sem - 0.30) * 0.5
 
-            item_copy = dict(mem)
-            item_copy["recall_score"] = round(final_score, 4)
-            item_copy["composite_score"] = round(composite, 4)
-            item_copy["_scores"] = {
-                "semantic": round(sem, 3),
-                "entity": round(ent, 3),
-                "emotion": round(emo, 3),
-                "recency": round(rec, 3),
-                "decay": round(decay, 3),
-            }
-            ranked_items.append(item_copy)
+            # Noise filter: keep if composite/final meets threshold, or strong entity/semantic match
+            if composite >= self.min_score or final_score >= self.min_score or ent >= 0.8 or sem >= 0.35:
+                item_copy = dict(mem)
+                item_copy["recall_score"] = round(final_score, 4)
+                item_copy["composite_score"] = round(composite, 4)
+                item_copy["_scores"] = {
+                    "semantic": round(sem, 3),
+                    "entity": round(ent, 3),
+                    "emotion": round(emo, 3),
+                    "recency": round(rec, 3),
+                    "decay": round(decay, 3),
+                }
+                ranked_items.append(item_copy)
 
         ranked_items.sort(key=lambda x: x["recall_score"], reverse=True)
         top_results = ranked_items[:limit]
