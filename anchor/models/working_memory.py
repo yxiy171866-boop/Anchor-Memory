@@ -7,7 +7,7 @@ class WorkingMemoryItem(BaseModel):
     id: str
     content: str
     category: str = "general"
-    status: Literal["active", "expired"] = "active"
+    status: str = "active"
     created_at: str
     created_by: str = "companion"
     expired_at: Optional[str] = None

@@ -62,16 +62,16 @@ class ConversationSearchTool:
         scope = (scope or "recent").strip().lower()
         now = datetime.now()
         if scope == "recent":
-            return (now - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+            return (now - timedelta(days=3)).strftime("%Y-%m-%d")
         if scope == "7d":
-            return (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+            return (now - timedelta(days=7)).strftime("%Y-%m-%d")
         if scope == "30d":
-            return (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+            return (now - timedelta(days=30)).strftime("%Y-%m-%d")
         if scope == "90d":
-            return (now - timedelta(days=90)).strftime("%Y-%m-%d %H:%M:%S")
+            return (now - timedelta(days=90)).strftime("%Y-%m-%d")
         if scope == "all":
             return None
-        return (now - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+        return (now - timedelta(days=3)).strftime("%Y-%m-%d")
 
     def search_conversation(
         self,
@@ -82,7 +82,7 @@ class ConversationSearchTool:
         end_date: Optional[str] = None,
         conversation_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Search chat messages by query, scope, or specific date range."""
+        """Search chat messages by query, scope, or specific date range with fast two-stage candidate filtering."""
         query = (query or "").strip()
         if not query:
             return {"error": "Query is required", "results": []}
@@ -102,14 +102,20 @@ class ConversationSearchTool:
             start_time = self._scope_to_start_time(scope)
 
         query_tokens = _tokenize(query)
-        query_vec = self.embedder.get_embedding_vector(query)
+        meaningful_tokens = [t for t in query_tokens if len(t) >= 2][:6]
 
         try:
-            with sqlite3.connect(str(self.chat_db_path), timeout=5.0) as conn:
+            # Connect in read-only mode if supported to avoid locking against writers
+            db_uri = f"file:{self.chat_db_path}?mode=ro"
+            try:
+                conn = sqlite3.connect(db_uri, uri=True, timeout=5.0)
+            except Exception:
+                conn = sqlite3.connect(str(self.chat_db_path), timeout=5.0)
+
+            with conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
 
-                # Flexible schema check: filter conversation_id if column exists
                 where_clauses = []
                 params = []
 
@@ -125,8 +131,17 @@ class ConversationSearchTool:
                     where_clauses.append("created_at <= ?")
                     params.append(end_time)
 
+                # Stage 1: Coarse candidate pre-filter
+                # When searching broad history (scope='all' or long spans), use SQL LIKE to avoid full table scanning 10k+ rows
+                if not start_time and meaningful_tokens:
+                    like_clauses = ["content LIKE ?" for _ in meaningful_tokens]
+                    where_clauses.append(f"({' OR '.join(like_clauses)})")
+                    for t in meaningful_tokens:
+                        params.append(f"%{t}%")
+
                 where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-                sql = f"SELECT id, role, content, created_at FROM chat_messages {where_sql} ORDER BY id DESC"
+                # Cap candidate rows to at most 200 for sub-second performance
+                sql = f"SELECT id, role, content, created_at FROM chat_messages {where_sql} ORDER BY id DESC LIMIT 200"
                 
                 cursor.execute(sql, params)
                 rows = cursor.fetchall()
@@ -134,18 +149,37 @@ class ConversationSearchTool:
             logger.warning(f"Failed to query chat_messages: {e}")
             return {"error": str(e), "results": []}
 
-        ranked = []
+        if not rows:
+            used_scope = f"{start_date}~{end_date}" if (start_date or end_date) else scope
+            return {
+                "query": query,
+                "scope": used_scope,
+                "count": 0,
+                "results": []
+            }
+
+        # Stage 2: Coarse keyword scoring
+        candidates = []
         for r in rows:
             content = r["content"] or ""
-            kw_score = _keyword_score(query_tokens, content)
+            kw = _keyword_score(query_tokens, content)
+            candidates.append((kw, r))
+
+        # Sort by keyword matches descending; only evaluate embeddings on top 30 candidates to avoid latency
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        top_candidates = candidates[:30]
+
+        query_vec = self.embedder.get_embedding_vector(query)
+        ranked = []
+        for kw_score, r in top_candidates:
+            content = r["content"] or ""
             msg_vec = self.embedder.get_embedding_vector(content)
             sem_score = self.embedder.cosine_similarity(query_vec, msg_vec)
 
-            # Combined score
             kw_bonus = min(kw_score, 1.5)
             retrieval_score = sem_score * 10.0 + kw_bonus
 
-            if sem_score < 0.30 and kw_score <= 0:
+            if sem_score < 0.25 and kw_score <= 0:
                 continue
 
             ranked.append({

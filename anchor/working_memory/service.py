@@ -193,6 +193,39 @@ class WorkingMemoryService:
             rows = cursor.fetchall()
             return [WorkingMemoryItem(**dict(r)) for r in rows]
 
+    def get_items(self, status: str = "active") -> List[WorkingMemoryItem]:
+        """Fetch working memory items filtered by status ('active', 'expired', 'archived', 'all')."""
+        status_clean = (status or "active").strip().lower()
+        if status_clean == "active":
+            return self.get_active_items()
+        elif status_clean == "expired":
+            return self.get_expired_buffer()
+
+        with self._db() as conn:
+            cursor = conn.cursor()
+            if status_clean == "all":
+                cursor.execute(
+                    """
+                    SELECT id, content, category, status, created_at, created_by,
+                           expired_at, expire_reason, auto_clear_after_days
+                    FROM anchor_working_memory
+                    ORDER BY created_at DESC
+                    """
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, content, category, status, created_at, created_by,
+                           expired_at, expire_reason, auto_clear_after_days
+                    FROM anchor_working_memory
+                    WHERE status = ?
+                    ORDER BY created_at DESC
+                    """,
+                    (status_clean,)
+                )
+            rows = cursor.fetchall()
+            return [WorkingMemoryItem(**dict(r)) for r in rows]
+
     def check_and_expire_overdue_items(self) -> int:
         """Automatically transition active items to 'expired' if they exceeded auto_clear_after_days."""
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
