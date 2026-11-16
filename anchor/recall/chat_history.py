@@ -132,8 +132,8 @@ class ConversationSearchTool:
                     params.append(end_time)
 
                 # Stage 1: Coarse candidate pre-filter
-                # When searching broad history (scope='all' or long spans), use SQL LIKE to avoid full table scanning 10k+ rows
-                if not start_time and meaningful_tokens:
+                # Use SQL LIKE on meaningful keywords to quickly select relevant candidates from the DB
+                if meaningful_tokens:
                     like_clauses = ["content LIKE ?" for _ in meaningful_tokens]
                     where_clauses.append(f"({' OR '.join(like_clauses)})")
                     for t in meaningful_tokens:
