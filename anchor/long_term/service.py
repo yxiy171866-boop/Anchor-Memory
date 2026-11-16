@@ -53,8 +53,17 @@ class LongTermMemoryService:
         memory_id = custom_id or f"mem_{datetime.now().strftime('%Y%m%d')}_{uuid.uuid4().hex[:6]}"
         now = created_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Safe importance parsing: allows 0.0, clamps to [0.0, 1.0]
-        safe_importance = 0.5 if importance is None else max(0.0, min(1.0, float(importance)))
+        # Safe importance parsing: allows 0.0, clamps to [0.0, 1.0], normalizes 1~5 and 1~10 scales
+        try:
+            raw_imp = float(importance if importance is not None else 0.5)
+            if raw_imp > 5.0:
+                safe_importance = min(1.0, max(0.1, raw_imp / 10.0))
+            elif raw_imp > 1.0:
+                safe_importance = min(1.0, max(0.1, raw_imp / 5.0))
+            else:
+                safe_importance = min(1.0, max(0.0, raw_imp))
+        except Exception:
+            safe_importance = 0.5
         safe_valence = max(-1.0, min(1.0, float(valence if valence is not None else 0.0)))
         safe_arousal = max(0.0, min(1.0, float(arousal if arousal is not None else 0.0)))
 

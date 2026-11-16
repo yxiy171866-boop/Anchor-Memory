@@ -119,11 +119,22 @@ class MultiWayRetriever:
             explicit_entities = set(str(e).lower() for e in (mem.get("entities") or []))
             content_tokens = extract_robust_tokens(mem["content"])
 
+            # Extract quoted terms from memory text for high-priority matching
+            quotes = set(re.findall(r"[「“《]([^」”》]+)[」”》]", str(mem.get("content", "")).lower()))
+            for q_term in quotes:
+                if len(q_term) >= 2:
+                    content_tokens.add(q_term)
+
             all_mem_tokens = explicit_entities | content_tokens
             overlap = query_tokens & all_mem_tokens
 
-            # Score by overlap proportion
-            score = len(overlap) / max(1, len(query_tokens))
+            # Score by overlap proportion, with full boost for exact quoted terms or direct entity matches
+            has_quoted_match = any(q in query.lower() for q in quotes if len(q) >= 2)
+            has_explicit_match = any(e in query.lower() for e in explicit_entities if len(e) >= 2)
+            if has_quoted_match or has_explicit_match:
+                score = 1.0
+            else:
+                score = len(overlap) / max(1, len(query_tokens))
             scores[mem["id"]] = min(1.0, score)
 
         return scores
